@@ -51,7 +51,7 @@
     <script>
       let recordedBuffer = null; 
       let processedBuffer = null; 
-      let waveform = [];
+      let waveform = []; // 現在描画対象のデータ（間引き済み）
       let currentSource = null; 
       let audioContext = null; 
       let startTime = 0; 
@@ -80,7 +80,6 @@
       function updateSampleRateDisplay() {
         const sliderValue = int(select("#sampleSlider").value());
         const sampleStep = calculateSampleStep(sliderValue); 
-        
         const currentRate = BASE_SAMPLE_RATE / sampleStep;
         
         let rateText;
@@ -117,11 +116,11 @@
               select("#fileStatus").html("音声ファイルを読み込んでください").style("color", "blue");
           }
           
-          // 再生停止時にdraw()ループを止める
+          // draw()ループを停止
           noLoop(); 
           // ハイライトなしで波形を再描画
           if(processedBuffer) {
-              drawWaveform(processedBuffer, -1); 
+              drawWaveformArray(waveform, -1); // 最後に計算されたwaveformを使用
           } else if (recordedBuffer) {
               drawWaveform(recordedBuffer, -1);
           }
@@ -129,15 +128,13 @@
 
 
       function setup() {
-        // キャンバスのサイズ設定
         let cnv = createCanvas(600, 400); 
         cnv.parent("waveContainer");
         background(240);
         textAlign(CENTER);
         text("ファイルを読み込むと波形がここに表示されます", width / 2, height / 2);
 
-        // draw()の自動実行を停止（再生開始時に再開する）
-        noLoop(); 
+        noLoop(); // 初期状態ではdraw()を停止
         
         select("#processBtn").mousePressed(processAndPlay);
         select("#stopBtn").mousePressed(stopCurrentPlayback); 
@@ -149,7 +146,6 @@
         
         const fileInput = select("#fileInput");
         const dropZone = select("#dropZone");
-
         fileInput.changed(handleFileSelect);
         
         dropZone.dragOver(() => {
@@ -162,6 +158,8 @@
         dropZone.drop(handleFileDrop);
       }
       
+      // ... handleFileDrop, handleFileSelect, handleFile は省略 ...
+      // 適切な動作のため、前回の完全なhandleFileの内容を維持する。
       function handleFileDrop(event) {
           event.preventDefault(); 
           select("#dropZone").style("background-color", "#fff");
@@ -215,26 +213,30 @@
           }
       }
 
-
-      function drawWaveform(buffer, highlightIndex = -1) {
+      // 【修正点1: 波形データの準備と背景クリア】
+      function drawWaveform(buffer) {
+        // 背景をクリアして新しい波形を描画
+        background(255); 
+        
         if (!buffer) {
-          background(255);
           text("ファイルを読み込んでください", width / 2, height / 2);
           return;
         }
+        
         const data = buffer.getChannelData(0);
-        waveform = [];
-        // 幅600pxに合わせてデータを間引く
+        waveform = []; // グローバル変数に間引き済みデータを格納
         const step = Math.floor(data.length / width); 
         for (let i = 0; i < data.length; i += step) {
           waveform.push(data[i]);
         }
-        // ハイライトインデックスを渡して描画
-        drawWaveformArray(waveform, highlightIndex);
+        
+        // ハイライトなしで描画（描画はdrawWaveformArrayに任せる）
+        drawWaveformArray(waveform, -1); 
       }
 
+      // 【修正点2: 描画のみに特化】
       function drawWaveformArray(arr, highlightIndex) {
-        background(255); // 【重要】毎フレーム背景をクリア
+        // draw()から呼ばれるときは背景クリアは行わない (draw()がbackgroundを呼ぶため)
         
         // 通常の波形を描画
         stroke(0);
@@ -247,7 +249,7 @@
         }
         endShape();
 
-        // 【修正点：再生位置のハイライト表示】
+        // 再生位置のハイライト表示
         if (highlightIndex >= 0) {
             stroke(255, 0, 0); // 赤色
             strokeWeight(2);
@@ -295,7 +297,7 @@
         
         processedBuffer = newBuffer;
 
-        drawWaveform(processedBuffer); // 初期波形を描画
+        drawWaveform(processedBuffer); // 初期波形を描画し、waveformグローバル変数を設定
         
         const src = ctx.createBufferSource();
         src.buffer = processedBuffer;
@@ -308,8 +310,7 @@
         select("#stopBtn").removeAttribute("disabled");
         select("#fileStatus").html("処理後の音を再生中...").style("color", "darkorange");
         
-        // draw()の実行を再開
-        loop();
+        loop(); // draw()の実行を再開
 
         src.onended = () => {
             if (currentSource === src) {
@@ -318,28 +319,31 @@
         };
       }
 
+      // 【修正点3: リアルタイム描画ロジックの改善】
       function draw() {
         if (!currentSource || !processedBuffer) {
             noLoop(); 
             return;
         }
+        
+        background(255); // 毎フレーム、背景をクリア (波形描画前にクリアすることでちらつきを防ぐ)
 
         const ctx = getAudioContext();
-        // 経過時間 (秒) = 現在時刻 - 再生開始時刻
         const elapsedTime = ctx.currentTime - startTime;
         
+        const totalDuration = processedBuffer.duration;
+        
         // 再生が終了したら自動停止
-        if (elapsedTime > processedBuffer.duration) {
+        if (elapsedTime >= totalDuration) {
              stopCurrentPlayback();
              return;
         }
 
         // キャンバス幅（600px）を基準にした現在のX座標を計算
-        const totalDuration = processedBuffer.duration;
         let currentIndex = map(elapsedTime, 0, totalDuration, 0, width);
         
-        // 波形を再描画し、現在位置をハイライト
-        drawWaveform(processedBuffer, currentIndex);
+        // 既に計算された間引き済み波形データ（waveform）と現在位置を渡して描画
+        drawWaveformArray(waveform, currentIndex);
       }
     </script>
   </body>
