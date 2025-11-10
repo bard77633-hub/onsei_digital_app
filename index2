@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>音のデジタル化体験（ファイルアップロード＆録音）</title>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/addons/p5.sound.min.js"></script>
+    <style>
+      #dropZone {
+        border: 2px dashed #ccc;
+        border-radius: 10px;
+        padding: 30px;
+        margin-bottom: 20px;
+        text-align: center;
+        transition: background-color 0.3s;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main style="text-align:center;">
+      <h2>🎙️ 音のデジタル化体験</h2>
+      <p>音声ファイルをアップロードするか、**マイクで録音**して、標本化と量子化の影響を体験しよう。</p>
+
+      <div id="dropZone" ondragover="return false;">
+        ファイルをここにドラッグ＆ドロップ、または<br />
+        <label for="fileInput" style="color: blue; text-decoration: underline;">クリックしてファイルを選択</label>
+        <input type="file" id="fileInput" accept="audio/*" style="display: none;" />
+      </div>
+
+      <button id="recordStartBtn">🎙️ 録音開始</button>
+      <button id="recordStopBtn" disabled>■ 録音停止</button>
+      
+      <span id="fileStatus" style="color:blue; display:block; margin-top:10px;">音声ファイルを読み込んでください</span><br />
+
+      <button id="processBtn" disabled>⚙️ 処理＆再生</button>
+      <button id="stopBtn" disabled>■ 再生を停止</button><br /><br />
+      
+      <label>元の音声再生:</label>
+      <audio id="playback" controls disabled></audio><br /><br />
+
+      <label>標本化レート（低レート ← **高音質** → 高レート）：</label>
+      <input type="range" id="sampleSlider" min="1" max="50" value="50" /> 
+      <span id="sampleValue"></span><br />
+
+      <label>量子化ビット数（2 bit ← **高音質** → 24 bit）：</label>
+      <input type="range" id="bitSlider" min="2" max="24" value="8" />
+      <span id="bitValue"></span><br /><br />
+
+      <div id="waveContainer" style="margin-top:20px;">
+        <h4>波形表示</h4>
+      </div>
+    </main>
+
+    <script>
+      let recordedBuffer = null; 
+      let processedBuffer = null; 
+      let waveform = []; 
+      let currentSource = null; 
+      let audioContext = null; 
+      let startTime = 0; 
+      
+      // 【追加】p5.sound 録音関連オブジェクト
+      let mic;
+      let recorder;
+      let soundFile;
+
+      const BASE_SAMPLE_RATE = 44100;
+      const MAX_STEP = 50;
+      const FIXED_GAIN = 4.0; 
+
+      function getAudioContext() {
+          if (!audioContext) {
+              audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          return audioContext;
+      }
+
+      function calculateSampleStep(sliderValue) {
+          const normalized = (sliderValue - 1) / (MAX_STEP - 1);
+          const reverseNormalized = 1 - normalized; 
+          const minStep = 1;
+          const logMin = Math.log(minStep);
+          const logMax = Math.log(MAX_STEP);
+          const logStep = logMin + (logMax - logMin) * reverseNormalized;
+          const sampleStep = Math.round(Math.exp(logStep));
+          return Math.max(minStep, sampleStep); 
+      }
+
+      function updateSampleRateDisplay() {
+        const sliderValue = int(select("#sampleSlider").value());
+        const sampleStep = calculateSampleStep(sliderValue); 
+        const currentRate = BASE_SAMPLE_RATE / sampleStep;
+        
+        let rateText;
+        if (currentRate >= 1000) {
+          rateText = (currentRate / 1000).toFixed(1) + " kHz";
+        } else {
+          rateText = currentRate.toFixed(0) + " Hz";
+        }
+
+        const minRate = (BASE_SAMPLE_RATE / MAX_STEP).toFixed(0);
+        select("#sampleValue").html(`${rateText} (範囲: ${minRate} Hz 〜 44.1 kHz)`);
+      }
+
+      function updateBitDepthDisplay() {
+        select("#bitValue").html(`${select("#bitSlider").value()} bit`);
+      }
+
+      function stopCurrentPlayback() {
+          if (currentSource) {
+              try {
+                  currentSource.stop();
+              } catch (e) {
+                  // エラーは無視
+              } finally {
+                  currentSource = null;
+              }
+          }
+          select("#stopBtn").attribute("disabled", "true");
+          
+          if (recordedBuffer) {
+              const duration = recordedBuffer.duration.toFixed(2);
+              select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
+          } else {
+              select("#fileStatus").html("音声ファイルを読み込んでください").style("color", "blue");
+          }
+          
+          noLoop(); 
+          if(processedBuffer) {
+              drawWaveformArray(waveform, -1); 
+          } else if (recordedBuffer) {
+              drawWaveform(recordedBuffer, -1);
+          }
+      }
+
+
+      function setup() {
+        let cnv = createCanvas(600, 400); 
+        cnv.parent("waveContainer");
+        background(240);
+        textAlign(CENTER);
+        text("ファイルを読み込むと波形がここに表示されます", width / 2, height / 2);
+
+        noLoop(); 
+        
+        // 【追加】マイクと録音機能の初期化
+        mic = new p5.AudioIn();
+        recorder = new p5.SoundRecorder();
+        soundFile = new p5.SoundFile();
+        recorder.setInput(mic);
+        mic.start(); // ブラウザにマイク許可を求める
+
+        // イベントリスナーの設定
+        select("#processBtn").mousePressed(processAndPlay);
+        select("#stopBtn").mousePressed(stopCurrentPlayback); 
+        select("#sampleSlider").input(updateSampleRateDisplay);
+        select("#bitSlider").input(updateBitDepthDisplay);
+        
+        // 【追加】録音ボタンのイベントリスナー
+        select("#recordStartBtn").mousePressed(startRecording);
+        select("#recordStopBtn").mousePressed(stopRecording);
+
+        updateSampleRateDisplay(); 
+        updateBitDepthDisplay();
+        
+        const fileInput = select("#fileInput");
+        const dropZone = select("#dropZone");
+        fileInput.changed(handleFileSelect);
+        
+        dropZone.dragOver(() => {
+            dropZone.style("background-color", "#f0f0ff");
+            return false;
+        });
+        dropZone.dragLeave(() => {
+            dropZone.style("background-color", "#fff");
+        });
+        dropZone.drop(handleFileDrop);
+      }
+      
+      // 【追加】録音開始
+      function startRecording() {
+        if (mic.enabled) {
+          stopCurrentPlayback(); 
+          recorder.record(soundFile);
+          
+          select("#recordStartBtn").attribute("disabled", "true");
+          select("#recordStopBtn").removeAttribute("disabled");
+          select("#fileStatus").html("🔴 録音中... マイクに向かって話してください").style("color", "red");
+          select("#processBtn").attribute("disabled", "true");
+        } else {
+          // ユーザーがマイクをブロックしている場合の再要求
+          mic.start(); 
+          select("#fileStatus").html("マイクの使用を許可してください").style("color", "orange");
+        }
+      }
+
+      // 【追加】録音停止
+      function stopRecording() {
+        recorder.stop();
+        
+        select("#recordStartBtn").removeAttribute("disabled");
+        select("#recordStopBtn").attribute("disabled", "true");
+        select("#fileStatus").html("💾 録音データ処理中...").style("color", "blue");
+
+        // 録音後の処理
+        handleSoundFile(soundFile);
+      }
+      
+      // 【追加】p5.SoundFileからAudioBufferへの変換と処理
+      async function handleSoundFile(sf) {
+          const ctx = getAudioContext();
+
+          // p5.SoundFileのバッファを取得
+          const p5Buffer = sf.buffer;
+          if (!p5Buffer) {
+              select("#fileStatus").html("❌ 録音データが見つかりません。").style("color", "red");
+              return;
+          }
+
+          // Web Audio APIのAudioBufferに変換してコピー
+          const numChannels = p5Buffer.numberOfChannels;
+          const length = p5Buffer.length;
+          const sampleRate = p5Buffer.sampleRate;
+          recordedBuffer = ctx.createBuffer(numChannels, length, sampleRate);
+
+          for (let ch = 0; ch < numChannels; ch++) {
+              recordedBuffer.copyToChannel(p5Buffer.getChannelData(ch), ch, 0);
+          }
+          
+          // 再生プレビューのソースをBlobとして生成し、再生可能にする
+          sf.toBuffer(buffer => {
+              const blob = new Blob([buffer], { type: 'audio/wav' });
+              const playback = select("#playback");
+              playback.attribute("src", URL.createObjectURL(blob));
+              playback.removeAttribute("disabled");
+          });
+
+          const duration = recordedBuffer.duration.toFixed(2);
+          select("#fileStatus").html(`✅ 録音完了 (${duration} 秒)`).style("color", "green");
+          
+          drawWaveform(recordedBuffer);
+          select("#processBtn").removeAttribute("disabled");
+      }
+
+      
+      // ... handleFileDrop, handleFileSelect, handleFile は省略なしで維持 ...
+      function handleFileDrop(event) {
+          event.preventDefault(); 
+          select("#dropZone").style("background-color", "#fff");
+          const files = event.dataTransfer.files;
+          if (files.length > 0) {
+              handleFile(files[0]);
+          }
+      }
+
+      function handleFileSelect() {
+          const file = this.elt.files[0];
+          if (file) {
+              handleFile(file);
+          }
+      }
+
+      async function handleFile(file) {
+          stopCurrentPlayback(); 
+          
+          if (!file.type.startsWith("audio/")) {
+              select("#fileStatus").html("❌ 無効なファイル形式です。音声ファイルを選択してください。").style("color", "red");
+              return;
+          }
+
+          select("#fileStatus").html(`🎵 ${file.name} を読み込み中...`).style("color", "blue");
+          select("#processBtn").attribute("disabled", "true");
+          const playback = select("#playback");
+          playback.attribute("disabled", "true");
+          playback.attribute("src", "");
+
+          try {
+              const arrayBuffer = await file.arrayBuffer();
+              const ctx = getAudioContext();
+              recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
+              processedBuffer = null;
+
+              const duration = recordedBuffer.duration.toFixed(2);
+              select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
+              
+              playback.attribute("src", URL.createObjectURL(file)); 
+              playback.removeAttribute("disabled");
+              
+              drawWaveform(recordedBuffer);
+              select("#processBtn").removeAttribute("disabled");
+
+          } catch (e) {
+              select("#fileStatus").html(`❌ デコードエラーが発生しました: ${e.message}`).style("color", "red");
+              recordedBuffer = null;
+              processedBuffer = null;
+              drawWaveform(null);
+          }
+      }
+
+      // drawWaveformとdrawWaveformArrayは波形表示ロジック維持のため変更なし
+      function drawWaveform(buffer) {
+        background(255); 
+        
+        if (!buffer) {
+          text("ファイルを読み込んでください", width / 2, height / 2);
+          return;
+        }
+        
+        const data = buffer.getChannelData(0);
+        waveform = []; 
+        const step = Math.floor(data.length / width); 
+        for (let i = 0; i < data.length; i += step) {
+          waveform.push(data[i]);
+        }
+        
+        drawWaveformArray(waveform, -1); 
+      }
+
+      function drawWaveformArray(arr, highlightIndex) {
+        const FIXED_GAIN = 4.0; 
+        const displayScale = 1.5; 
+
+        stroke(0);
+        strokeWeight(1.5);
+        noFill();
+        beginShape();
+
+        for (let x = 0; x < arr.length; x++) {
+          let val = constrain(arr[x] * FIXED_GAIN * displayScale, -1, 1);
+          const y = height / 2 - val * (height / 2);
+          vertex(x, y);
+        }
+        endShape();
+
+        stroke(200);
+        line(0, height / 2, width, height / 2);
+
+        if (highlightIndex >= 0) {
+          stroke(255, 0, 0);
+          strokeWeight(2);
+          line(highlightIndex, 0, highlightIndex, height);
+          strokeWeight(1);
+        }
+      }
+
+      function processAndPlay() {
+        if (!recordedBuffer) return alert("音声データが読み込まれていません。");
+        
+        stopCurrentPlayback(); 
+
+        const sliderValue = int(select("#sampleSlider").value());
+        const sampleStep = calculateSampleStep(sliderValue); 
+
+        const bitDepth = int(select("#bitSlider").value());
+        const ctx = getAudioContext();
+
+        const numChannels = recordedBuffer.numberOfChannels;
+        const length = recordedBuffer.length;
+        const sampleRate = recordedBuffer.sampleRate;
+        const newBuffer = ctx.createBuffer(numChannels, length, sampleRate);
+
+        for (let ch = 0; ch < numChannels; ch++) {
+          const input = recordedBuffer.getChannelData(ch);
+          const output = newBuffer.getChannelData(ch);
+          
+          let lastValue = 0;
+
+          for (let i = 0; i < length; i++) {
+            if (i % sampleStep === 0) {
+              const quantLevels = Math.pow(2, bitDepth);
+              const scale = quantLevels / 2;
+              lastValue = Math.round(input[i] * scale) / scale;
+              output[i] = lastValue;
+
+            } else {
+              output[i] = lastValue; 
+            }
+          }
+        }
+        
+        processedBuffer = newBuffer;
+
+        drawWaveform(processedBuffer); 
+        
+        const src = ctx.createBufferSource();
+        src.buffer = processedBuffer;
+        src.connect(ctx.destination);
+        
+        startTime = ctx.currentTime;
+        src.start(0); 
+        
+        currentSource = src;
+        select("#stopBtn").removeAttribute("disabled");
+        select("#fileStatus").html("処理後の音を再生中...").style("color", "darkorange");
+        
+        loop(); 
+
+        src.onended = () => {
+            if (currentSource === src) {
+                stopCurrentPlayback(); 
+            }
+        };
+      }
+
+      function draw() {
+        if (!currentSource || !processedBuffer) {
+            noLoop(); 
+            return;
+        }
+        
+        background(255); 
+
+        const ctx = getAudioContext();
+        const elapsedTime = ctx.currentTime - startTime;
+        
+        const totalDuration = processedBuffer.duration;
+        
+        if (elapsedTime >= totalDuration) {
+             stopCurrentPlayback();
+             return;
+        }
+
+        let currentIndex = map(elapsedTime, 0, totalDuration, 0, width);
+        
+        drawWaveformArray(waveform, currentIndex);
+      }
+    </script>
+  </body>
+</html>
