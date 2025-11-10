@@ -50,33 +50,35 @@
 
     <script>
       let recordedBuffer = null; 
+      let processedBuffer = null; // 処理後のバッファを格納
       let waveform = [];
       let currentSource = null; 
-      const BASE_SAMPLE_RATE = 44100; // 基準サンプリングレート（Hz）
-      const MAX_STEP = 50; // スライダーの最大ステップ数
+      let audioContext = null; // AudioContextを保持する
+      let startTime = 0; // 再生開始時刻 (AudioContext.currentTime)
+      
+      const BASE_SAMPLE_RATE = 44100;
+      const MAX_STEP = 50;
 
-      // 標本化ステップを対数スケールで計算する関数
+      // AudioContextを初期化または取得
+      function getAudioContext() {
+          if (!audioContext) {
+              audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          return audioContext;
+      }
+
+      // 標本化ステップを計算する関数
       function calculateSampleStep(sliderValue) {
-          const sliderMin = 1;
-          const sliderMax = 50;
-          
-          const normalized = (sliderValue - sliderMin) / (sliderMax - sliderMin);
+          const normalized = (sliderValue - 1) / (MAX_STEP - 1);
           const reverseNormalized = 1 - normalized; 
-
           const minStep = 1;
-          const maxStep = MAX_STEP;
-
           const logMin = Math.log(minStep);
-          const logMax = Math.log(maxStep);
-          
+          const logMax = Math.log(MAX_STEP);
           const logStep = logMin + (logMax - logMin) * reverseNormalized;
-
           const sampleStep = Math.round(Math.exp(logStep));
-          
           return Math.max(minStep, sampleStep); 
       }
 
-      // サンプリングレート表示を更新する関数
       function updateSampleRateDisplay() {
         const sliderValue = int(select("#sampleSlider").value());
         const sampleStep = calculateSampleStep(sliderValue); 
@@ -94,12 +96,10 @@
         select("#sampleValue").html(`${rateText} (範囲: ${minRate} Hz 〜 44.1 kHz)`);
       }
 
-      // ビット数表示を更新する関数
       function updateBitDepthDisplay() {
         select("#bitValue").html(`${select("#bitSlider").value()} bit`);
       }
 
-      // 再生ノードを停止する関数
       function stopCurrentPlayback() {
           if (currentSource) {
               try {
@@ -118,21 +118,30 @@
           } else {
               select("#fileStatus").html("音声ファイルを読み込んでください").style("color", "blue");
           }
+          
+          // 【修正点3: 再生停止時にdraw()ループを止める】
+          noLoop();
+          // ハイライトなしで波形を再描画
+          if(processedBuffer) {
+              drawWaveform(processedBuffer, -1); 
+          } else if (recordedBuffer) {
+              drawWaveform(recordedBuffer, -1);
+          }
       }
 
 
       function setup() {
-        // 【修正点1: キャンバスの高さを400pxに拡張】
         let cnv = createCanvas(600, 400); 
         cnv.parent("waveContainer");
         background(240);
         textAlign(CENTER);
         text("ファイルを読み込むと波形がここに表示されます", width / 2, height / 2);
 
-        // イベントリスナーの設定 (変更なし)
+        // 【修正点4: draw()の自動実行を停止】
+        noLoop(); 
+        
         select("#processBtn").mousePressed(processAndPlay);
         select("#stopBtn").mousePressed(stopCurrentPlayback); 
-
         select("#sampleSlider").input(updateSampleRateDisplay);
         select("#bitSlider").input(updateBitDepthDisplay);
 
@@ -154,10 +163,10 @@
         dropZone.drop(handleFileDrop);
       }
       
+      // ... handleFileDrop, handleFileSelect, handleFile は変更なし ...
       function handleFileDrop(event) {
           event.preventDefault(); 
           select("#dropZone").style("background-color", "#fff");
-          
           const files = event.dataTransfer.files;
           if (files.length > 0) {
               handleFile(files[0]);
@@ -189,6 +198,7 @@
               const arrayBuffer = await file.arrayBuffer();
               const ctx = getAudioContext();
               recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
+              processedBuffer = null; // 新規ファイルで処理済みバッファをリセット
 
               const duration = recordedBuffer.duration.toFixed(2);
               select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
@@ -196,17 +206,20 @@
               playback.attribute("src", URL.createObjectURL(file)); 
               playback.removeAttribute("disabled");
               
-              drawWaveform(recordedBuffer);
+              drawWaveform(recordedBuffer); // 元の波形を表示
               select("#processBtn").removeAttribute("disabled");
 
           } catch (e) {
               select("#fileStatus").html(`❌ デコードエラーが発生しました: ${e.message}`).style("color", "red");
               recordedBuffer = null;
+              processedBuffer = null;
               drawWaveform(null);
           }
       }
 
-      function drawWaveform(buffer) {
+
+      // 【drawWaveformの修正: ハイライトインデックス引数の追加】
+      function drawWaveform(buffer, highlightIndex = -1) {
         if (!buffer) {
           background(255);
           text("ファイルを読み込んでください", width / 2, height / 2);
@@ -218,21 +231,32 @@
         for (let i = 0; i < data.length; i += step) {
           waveform.push(data[i]);
         }
-        drawWaveformArray(waveform);
+        // ハイライトインデックスを渡して描画
+        drawWaveformArray(waveform, highlightIndex);
       }
 
-      function drawWaveformArray(arr) {
+      // 【drawWaveformArrayの修正: ハイライトインデックス引数の受け取り】
+      function drawWaveformArray(arr, highlightIndex) {
         background(255);
+        
+        // 通常の波形を描画
         stroke(0);
         noFill();
         beginShape();
         for (let x = 0; x < arr.length; x++) {
-          // 【修正点2: 振幅マッピングの調整】
-          // 振幅 -1 から 1 を、キャンバスの高さ（height）全体にマップする
           const y = map(arr[x], -1, 1, 0, height); 
           vertex(x, y);
         }
         endShape();
+
+        // 【修正点5: 再生位置のハイライト表示】
+        if (highlightIndex >= 0) {
+            stroke(255, 0, 0); // 赤色
+            strokeWeight(2);
+            // 垂直線を描画
+            line(highlightIndex, 0, highlightIndex, height);
+            strokeWeight(1); // ウェイトを元に戻す
+        }
       }
 
       function processAndPlay() {
@@ -246,6 +270,7 @@
         const bitDepth = int(select("#bitSlider").value());
         const ctx = getAudioContext();
 
+        // ... (処理ロジックは変更なし) ...
         const numChannels = recordedBuffer.numberOfChannels;
         const length = recordedBuffer.length;
         const sampleRate = recordedBuffer.sampleRate;
@@ -269,19 +294,27 @@
             }
           }
         }
+        
+        // 処理後のバッファをグローバル変数に保持
+        processedBuffer = newBuffer;
 
-        drawWaveform(newBuffer);
+        drawWaveform(processedBuffer);
         
         const src = ctx.createBufferSource();
-        src.buffer = newBuffer;
+        src.buffer = processedBuffer;
         src.connect(ctx.destination);
+        
+        // 【修正点6: 再生開始時刻を記録】
+        startTime = ctx.currentTime;
         src.start(0); 
         
         currentSource = src;
         select("#stopBtn").removeAttribute("disabled");
-
         select("#fileStatus").html("処理後の音を再生中...").style("color", "darkorange");
         
+        // 【修正点7: draw()の実行を再開】
+        loop();
+
         src.onended = () => {
             if (currentSource === src) {
                 stopCurrentPlayback(); 
@@ -289,7 +322,26 @@
         };
       }
 
-      function draw() {}
+      // 【修正点8: リアルタイム描画ロジック】
+      function draw() {
+        if (!currentSource || !processedBuffer) {
+            noLoop(); // 再生中でなければ停止
+            return;
+        }
+
+        const ctx = getAudioContext();
+        // 経過時間 (秒) = 現在時刻 - 再生開始時刻
+        const elapsedTime = ctx.currentTime - startTime;
+        
+        // AudioBufferの長さを基準にした経過インデックス
+        const totalDuration = processedBuffer.duration;
+        
+        // キャンバス幅（600px）を基準にした現在のX座標を計算
+        let currentIndex = map(elapsedTime, 0, totalDuration, 0, width);
+        
+        // 波形を再描画し、現在位置をハイライト
+        drawWaveform(processedBuffer, currentIndex);
+      }
     </script>
   </body>
 </html>
