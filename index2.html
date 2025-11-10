@@ -60,7 +60,6 @@
       let audioContext = null; 
       let startTime = 0; 
       
-      // 【変更】MediaRecorder関連オブジェクト
       let mediaRecorder;
       let audioChunks = [];
       let currentStream; 
@@ -71,7 +70,11 @@
 
       function getAudioContext() {
           if (!audioContext) {
+              // ユーザー操作時にコンテキストをアクティブ化するための安全策
               audioContext = new (window.AudioContext || window.webkitAudioContext)();
+              if (audioContext.state === 'suspended') {
+                  audioContext.resume();
+              }
           }
           return audioContext;
       }
@@ -144,8 +147,6 @@
 
         noLoop(); 
         
-        // p5.soundの初期化（micは使わないが、p5.soundライブラリは残す）
-        
         // イベントリスナーの設定
         select("#processBtn").mousePressed(processAndPlay);
         select("#stopBtn").mousePressed(stopCurrentPlayback); 
@@ -171,9 +172,14 @@
             dropZone.style("background-color", "#fff");
         });
         dropZone.drop(handleFileDrop);
+
+        // 最初のクリックでAudioContextを再開する処理（モバイル対策）
+        document.addEventListener('click', () => {
+          const ctx = getAudioContext();
+        }, { once: true });
       }
       
-      // 【変更】録音開始: MediaRecorderを使用
+      // 【修正】録音開始: constraintsをシンプル化し、互換性を高める
       async function startRecording() {
           stopCurrentPlayback(); 
           audioChunks = [];
@@ -183,7 +189,10 @@
               mediaRecorder = new MediaRecorder(currentStream);
               
               mediaRecorder.ondataavailable = event => {
-                  audioChunks.push(event.data);
+                  // チャンクが空でないことを確認
+                  if (event.data.size > 0) {
+                      audioChunks.push(event.data);
+                  }
               };
 
               mediaRecorder.onstop = () => {
@@ -202,7 +211,6 @@
           }
       }
 
-      // 【変更】録音停止: MediaRecorderを停止
       function stopRecording() {
           if (mediaRecorder && mediaRecorder.state !== "inactive") {
               mediaRecorder.stop();
@@ -212,25 +220,26 @@
               
               select("#recordStartBtn").removeAttribute("disabled");
               select("#recordStopBtn").attribute("disabled", "true");
-              select("#fileStatus").html("💾 録音データ処理中...").style("color", "blue");
+              // 録音停止後、すぐに「処理中」の状態を出す
+              select("#fileStatus").html("💾 録音データ処理中... しばらくお待ちください").style("color", "blue");
           }
       }
       
-      // 【変更】録音データ処理: BlobとdecodeAudioDataを使用
+      // 【修正】録音データ処理: Blobのtype指定を削除し、decodeAudioDataの処理を確実にする
       async function handleRecordedData() {
           if (audioChunks.length === 0) {
               select("#fileStatus").html("❌ 録音データが見つかりません。").style("color", "red");
               return;
           }
 
-          const audioBlob = new Blob(audioChunks, { type: 'audio/wav' }); // wavまたはmediaRecorder.mimeTypeを使用
+          // Blobタイプを指定しないことで、MediaRecorderが使用したネイティブフォーマットを使用させる
+          const audioBlob = new Blob(audioChunks); 
           
-          // BlobをArrayBufferに変換
           const arrayBuffer = await audioBlob.arrayBuffer();
           const ctx = getAudioContext();
           
-          // ファイルアップロードと同じ安全なパスでデコードする
           try {
+              // ここで処理が完了するまで待機する
               recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
               processedBuffer = null;
               
@@ -268,7 +277,6 @@
           }
       }
 
-      // ファイルアップロード時の処理（録音データのデコードパスと同じ）
       async function handleFile(file) {
           stopCurrentPlayback(); 
           
