@@ -41,7 +41,11 @@
 
       <label>量子化ビット数（2 bit ← **高音質** → 24 bit）：</label>
       <input type="range" id="bitSlider" min="2" max="24" value="8" />
-      <span id="bitValue"></span><br /><br />
+      <span id="bitValue"></span><br />
+
+      <label>波形表示の増幅（音量）：</label>
+      <input type="range" id="amplitudeGainSlider" min="1" max="1000" value="100" />
+      <span id="amplitudeGainValue"></span>倍<br /><br />
 
       <div id="waveContainer" style="margin-top:20px;">
         <h4>波形表示</h4>
@@ -97,6 +101,21 @@
         select("#bitValue").html(`${select("#bitSlider").value()} bit`);
       }
 
+      // 【追加: 振幅ゲインスライダーの表示更新関数】
+      function updateAmplitudeGainDisplay() {
+        // スライダー値は1から1000だが、表示は100で割って1.00〜10.00倍にする
+        select("#amplitudeGainValue").html((int(select("#amplitudeGainSlider").value()) / 100).toFixed(2));
+        
+        // ゲイン値が変更されたら波形を再描画
+        if (currentSource) { // 再生中の場合はリアルタイムで更新
+            // draw() がループしているので、自動的に更新される
+        } else if (processedBuffer) { // 停止中の場合は手動で再描画
+            drawWaveform(processedBuffer, -1);
+        } else if (recordedBuffer) { // ファイル読み込み直後の場合
+            drawWaveform(recordedBuffer, -1);
+        }
+      }
+
       function stopCurrentPlayback() {
           if (currentSource) {
               try {
@@ -116,11 +135,9 @@
               select("#fileStatus").html("音声ファイルを読み込んでください").style("color", "blue");
           }
           
-          // draw()ループを停止
           noLoop(); 
-          // ハイライトなしで波形を再描画
           if(processedBuffer) {
-              drawWaveformArray(waveform, -1); // 最後に計算されたwaveformを使用
+              drawWaveformArray(waveform, -1); 
           } else if (recordedBuffer) {
               drawWaveform(recordedBuffer, -1);
           }
@@ -134,15 +151,19 @@
         textAlign(CENTER);
         text("ファイルを読み込むと波形がここに表示されます", width / 2, height / 2);
 
-        noLoop(); // 初期状態ではdraw()を停止
+        noLoop(); 
         
         select("#processBtn").mousePressed(processAndPlay);
         select("#stopBtn").mousePressed(stopCurrentPlayback); 
         select("#sampleSlider").input(updateSampleRateDisplay);
         select("#bitSlider").input(updateBitDepthDisplay);
+        // 【追加: 振幅ゲインスライダーのイベントリスナー】
+        select("#amplitudeGainSlider").input(updateAmplitudeGainDisplay);
 
         updateSampleRateDisplay(); 
         updateBitDepthDisplay();
+        // 【追加: 振幅ゲインスライダーの初期表示】
+        updateAmplitudeGainDisplay();
         
         const fileInput = select("#fileInput");
         const dropZone = select("#dropZone");
@@ -158,8 +179,6 @@
         dropZone.drop(handleFileDrop);
       }
       
-      // ... handleFileDrop, handleFileSelect, handleFile は省略 ...
-      // 適切な動作のため、前回の完全なhandleFileの内容を維持する。
       function handleFileDrop(event) {
           event.preventDefault(); 
           select("#dropZone").style("background-color", "#fff");
@@ -213,9 +232,7 @@
           }
       }
 
-      // 【修正点1: 波形データの準備と背景クリア】
       function drawWaveform(buffer) {
-        // 背景をクリアして新しい波形を描画
         background(255); 
         
         if (!buffer) {
@@ -224,38 +241,37 @@
         }
         
         const data = buffer.getChannelData(0);
-        waveform = []; // グローバル変数に間引き済みデータを格納
+        waveform = []; 
         const step = Math.floor(data.length / width); 
         for (let i = 0; i < data.length; i += step) {
           waveform.push(data[i]);
         }
         
-        // ハイライトなしで描画（描画はdrawWaveformArrayに任せる）
         drawWaveformArray(waveform, -1); 
       }
 
-      // 【修正点2: 描画のみに特化】
       function drawWaveformArray(arr, highlightIndex) {
-        // draw()から呼ばれるときは背景クリアは行わない (draw()がbackgroundを呼ぶため)
-        
+        // 【修正点: 振幅ゲインの適用とクランプ】
+        const amplitudeGain = int(select("#amplitudeGainSlider").value()) / 100; // スライダー値は1〜1000なので100で割る
+
         // 通常の波形を描画
         stroke(0);
         strokeWeight(1);
         noFill();
         beginShape();
         for (let x = 0; x < arr.length; x++) {
-          const y = map(arr[x], -1, 1, 0, height); 
+          // 波形データにゲインを適用し、-1.0〜1.0の範囲にクランプ
+          let val = constrain(arr[x] * amplitudeGain, -1, 1);
+          const y = map(val, -1, 1, 0, height); 
           vertex(x, y);
         }
         endShape();
 
-        // 再生位置のハイライト表示
         if (highlightIndex >= 0) {
-            stroke(255, 0, 0); // 赤色
+            stroke(255, 0, 0); 
             strokeWeight(2);
-            // 垂直線を描画
             line(highlightIndex, 0, highlightIndex, height);
-            strokeWeight(1); // ウェイトを元に戻す
+            strokeWeight(1); 
         }
       }
 
@@ -270,7 +286,6 @@
         const bitDepth = int(select("#bitSlider").value());
         const ctx = getAudioContext();
 
-        // ... (処理ロジックは変更なし) ...
         const numChannels = recordedBuffer.numberOfChannels;
         const length = recordedBuffer.length;
         const sampleRate = recordedBuffer.sampleRate;
@@ -297,7 +312,7 @@
         
         processedBuffer = newBuffer;
 
-        drawWaveform(processedBuffer); // 初期波形を描画し、waveformグローバル変数を設定
+        drawWaveform(processedBuffer); 
         
         const src = ctx.createBufferSource();
         src.buffer = processedBuffer;
@@ -310,7 +325,7 @@
         select("#stopBtn").removeAttribute("disabled");
         select("#fileStatus").html("処理後の音を再生中...").style("color", "darkorange");
         
-        loop(); // draw()の実行を再開
+        loop(); 
 
         src.onended = () => {
             if (currentSource === src) {
@@ -319,30 +334,26 @@
         };
       }
 
-      // 【修正点3: リアルタイム描画ロジックの改善】
       function draw() {
         if (!currentSource || !processedBuffer) {
             noLoop(); 
             return;
         }
         
-        background(255); // 毎フレーム、背景をクリア (波形描画前にクリアすることでちらつきを防ぐ)
+        background(255); 
 
         const ctx = getAudioContext();
         const elapsedTime = ctx.currentTime - startTime;
         
         const totalDuration = processedBuffer.duration;
         
-        // 再生が終了したら自動停止
         if (elapsedTime >= totalDuration) {
              stopCurrentPlayback();
              return;
         }
 
-        // キャンバス幅（600px）を基準にした現在のX座標を計算
         let currentIndex = map(elapsedTime, 0, totalDuration, 0, width);
         
-        // 既に計算された間引き済み波形データ（waveform）と現在位置を渡して描画
         drawWaveformArray(waveform, currentIndex);
       }
     </script>
