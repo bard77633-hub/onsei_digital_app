@@ -35,13 +35,14 @@
       <label>元の音声再生:</label>
       <audio id="playback" controls disabled></audio><br /><br />
 
-      <label>標本化レート（最大44.1kHz）：</label>
-      <input type="range" id="sampleSlider" min="1" max="50" value="1" /> 
-      <span id="sampleValue"></span><br />
+<label>標本化レート（8kHz〜44.1kHz）：</label>
+<input type="range" id="sampleSlider" min="8000" max="44100" value="44100" step="1000" />
+<span id="sampleValue"></span><br />
 
-      <label>量子化ビット数（2〜24 bit）：</label>
-      <input type="range" id="bitSlider" min="2" max="24" value="8" />
-      <span id="bitValue"></span><br /><br />
+<label>量子化ビット数（2〜24 bit）：</label>
+<input type="range" id="bitSlider" min="2" max="24" value="16" />
+<span id="bitValue"></span><br /><br />
+
 
       <div id="waveContainer" style="margin-top:20px;">
         <h4>波形表示</h4>
