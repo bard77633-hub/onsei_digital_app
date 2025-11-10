@@ -41,11 +41,7 @@
 
       <label>量子化ビット数（2 bit ← **高音質** → 24 bit）：</label>
       <input type="range" id="bitSlider" min="2" max="24" value="8" />
-      <span id="bitValue"></span><br />
-
-      <label>波形表示の増幅（音量）：</label>
-      <input type="range" id="amplitudeGainSlider" min="1" max="1000" value="100" />
-      <span id="amplitudeGainValue"></span>倍<br /><br />
+      <span id="bitValue"></span><br /><br />
 
       <div id="waveContainer" style="margin-top:20px;">
         <h4>波形表示</h4>
@@ -55,13 +51,14 @@
     <script>
       let recordedBuffer = null; 
       let processedBuffer = null; 
-      let waveform = []; // 現在描画対象のデータ（間引き済み）
+      let waveform = []; 
       let currentSource = null; 
       let audioContext = null; 
       let startTime = 0; 
       
       const BASE_SAMPLE_RATE = 44100;
       const MAX_STEP = 50;
+      const FIXED_GAIN = 4.0; // 【修正】波形表示の固定増幅倍率
 
       function getAudioContext() {
           if (!audioContext) {
@@ -99,21 +96,6 @@
 
       function updateBitDepthDisplay() {
         select("#bitValue").html(`${select("#bitSlider").value()} bit`);
-      }
-
-      // 【追加: 振幅ゲインスライダーの表示更新関数】
-      function updateAmplitudeGainDisplay() {
-        // スライダー値は1から1000だが、表示は100で割って1.00〜10.00倍にする
-        select("#amplitudeGainValue").html((int(select("#amplitudeGainSlider").value()) / 100).toFixed(2));
-        
-        // ゲイン値が変更されたら波形を再描画
-        if (currentSource) { // 再生中の場合はリアルタイムで更新
-            // draw() がループしているので、自動的に更新される
-        } else if (processedBuffer) { // 停止中の場合は手動で再描画
-            drawWaveform(processedBuffer, -1);
-        } else if (recordedBuffer) { // ファイル読み込み直後の場合
-            drawWaveform(recordedBuffer, -1);
-        }
       }
 
       function stopCurrentPlayback() {
@@ -157,13 +139,10 @@
         select("#stopBtn").mousePressed(stopCurrentPlayback); 
         select("#sampleSlider").input(updateSampleRateDisplay);
         select("#bitSlider").input(updateBitDepthDisplay);
-        // 【追加: 振幅ゲインスライダーのイベントリスナー】
-        select("#amplitudeGainSlider").input(updateAmplitudeGainDisplay);
+        // 【修正】updateAmplitudeGainDisplayの呼び出しを削除
 
         updateSampleRateDisplay(); 
         updateBitDepthDisplay();
-        // 【追加: 振幅ゲインスライダーの初期表示】
-        updateAmplitudeGainDisplay();
         
         const fileInput = select("#fileInput");
         const dropZone = select("#dropZone");
@@ -179,6 +158,7 @@
         dropZone.drop(handleFileDrop);
       }
       
+      // ... handleFileDrop, handleFileSelect, handleFile は省略 ...
       function handleFileDrop(event) {
           event.preventDefault(); 
           select("#dropZone").style("background-color", "#fff");
@@ -232,6 +212,7 @@
           }
       }
 
+
       function drawWaveform(buffer) {
         background(255); 
         
@@ -250,39 +231,37 @@
         drawWaveformArray(waveform, -1); 
       }
 
-function drawWaveformArray(arr, highlightIndex) {
-  const amplitudeGain = int(select("#amplitudeGainSlider").value()) / 100;
+      function drawWaveformArray(arr, highlightIndex) {
+        // 【修正】amplitudeGainスライダーからの値取得を削除し、固定値を使用
+        const FIXED_GAIN = 4.0; // 4倍で固定
+        const displayScale = 1.5; // 波形を垂直に引き伸ばす倍率（この値はユーザーのコードから維持）
 
-  // ★ 追加: 表示用の縦方向スケーリング倍率
-  const displayScale = 1.5; // ← 値を大きくするとより迫力のある波形に（例：2.0 まで可）
+        stroke(0);
+        strokeWeight(1.5);
+        noFill();
+        beginShape();
 
-  stroke(0);
-  strokeWeight(1.5); // 太めにして視認性UP
-  noFill();
-  beginShape();
+        for (let x = 0; x < arr.length; x++) {
+          // 波形データに固定ゲインとdisplayScaleを両方適用し、-1.0〜1.0にクランプ
+          let val = constrain(arr[x] * FIXED_GAIN * displayScale, -1, 1);
+          // 中央線を基準に上下に描く（ユーザーのカスタムロジックを維持）
+          const y = height / 2 - val * (height / 2);
+          vertex(x, y);
+        }
+        endShape();
 
-  for (let x = 0; x < arr.length; x++) {
-    // ゲインと表示倍率を両方適用
-    let val = constrain(arr[x] * amplitudeGain * displayScale, -1, 1);
-    // ★ 中央線を基準に上下に描くように変更
-    const y = height / 2 - val * (height / 2);
-    vertex(x, y);
-  }
-  endShape();
+        // 中央線を淡く表示（ユーザーのカスタムロジックを維持）
+        stroke(200);
+        line(0, height / 2, width, height / 2);
 
-  // ★ 中央線を淡く表示
-  stroke(200);
-  line(0, height / 2, width, height / 2);
-
-  // ★ 現在位置の赤線表示
-  if (highlightIndex >= 0) {
-    stroke(255, 0, 0);
-    strokeWeight(2);
-    line(highlightIndex, 0, highlightIndex, height);
-    strokeWeight(1);
-  }
-}
-
+        // 現在位置の赤線表示（ユーザーのカスタムロジックを維持）
+        if (highlightIndex >= 0) {
+          stroke(255, 0, 0);
+          strokeWeight(2);
+          line(highlightIndex, 0, highlightIndex, height);
+          strokeWeight(1);
+        }
+      }
 
       function processAndPlay() {
         if (!recordedBuffer) return alert("音声データが読み込まれていません。");
