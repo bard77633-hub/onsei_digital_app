@@ -250,30 +250,39 @@
         drawWaveformArray(waveform, -1); 
       }
 
-      function drawWaveformArray(arr, highlightIndex) {
-        // 【修正点: 振幅ゲインの適用とクランプ】
-        const amplitudeGain = int(select("#amplitudeGainSlider").value()) / 100; // スライダー値は1〜1000なので100で割る
+function drawWaveformArray(arr, highlightIndex) {
+  const amplitudeGain = int(select("#amplitudeGainSlider").value()) / 100;
 
-        // 通常の波形を描画
-        stroke(0);
-        strokeWeight(1);
-        noFill();
-        beginShape();
-        for (let x = 0; x < arr.length; x++) {
-          // 波形データにゲインを適用し、-1.0〜1.0の範囲にクランプ
-          let val = constrain(arr[x] * amplitudeGain, -1, 1);
-          const y = map(val, -1, 1, 0, height); 
-          vertex(x, y);
-        }
-        endShape();
+  // ★ 追加: 表示用の縦方向スケーリング倍率
+  const displayScale = 1.5; // ← 値を大きくするとより迫力のある波形に（例：2.0 まで可）
 
-        if (highlightIndex >= 0) {
-            stroke(255, 0, 0); 
-            strokeWeight(2);
-            line(highlightIndex, 0, highlightIndex, height);
-            strokeWeight(1); 
-        }
-      }
+  stroke(0);
+  strokeWeight(1.5); // 太めにして視認性UP
+  noFill();
+  beginShape();
+
+  for (let x = 0; x < arr.length; x++) {
+    // ゲインと表示倍率を両方適用
+    let val = constrain(arr[x] * amplitudeGain * displayScale, -1, 1);
+    // ★ 中央線を基準に上下に描くように変更
+    const y = height / 2 - val * (height / 2);
+    vertex(x, y);
+  }
+  endShape();
+
+  // ★ 中央線を淡く表示
+  stroke(200);
+  line(0, height / 2, width, height / 2);
+
+  // ★ 現在位置の赤線表示
+  if (highlightIndex >= 0) {
+    stroke(255, 0, 0);
+    strokeWeight(2);
+    line(highlightIndex, 0, highlightIndex, height);
+    strokeWeight(1);
+  }
+}
+
 
       function processAndPlay() {
         if (!recordedBuffer) return alert("音声データが読み込まれていません。");
