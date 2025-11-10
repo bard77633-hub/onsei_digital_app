@@ -54,29 +54,21 @@
       let currentSource = null; 
       const BASE_SAMPLE_RATE = 44100; // 基準サンプリングレート（Hz）
 
-      // サンプリングレート表示を更新する関数
-      function updateSampleRateDisplay() {
-        const step = int(select("#sampleSlider").value());
-        const maxStep = int(select("#sampleSlider").attribute("max"));
-        
-        // 現在のレートを計算
-        const currentRate = BASE_SAMPLE_RATE / step;
-        
-        // 下限のレート（最大間引き時）を計算
-        const minRate = BASE_SAMPLE_RATE / maxStep; 
-        
-        let rateText;
-        if (currentRate >= 1000) {
-            rateText = `${(currentRate / 1000).toFixed(1)} k Hz`;
-        } else {
-            rateText = `${currentRate.toFixed(0)} Hz`;
-        }
-        
-        // 下限レートを明示
-        const minRateText = `${minRate.toFixed(0)} Hz`;
-        
-        select("#sampleValue").html(`${rateText} (下限は約 ${minRateText})`);
-      }
+// サンプリングレート表示を更新する関数（改良版）
+function updateSampleRateDisplay() {
+  const step = int(select("#sampleSlider").value());
+  const currentRate = BASE_SAMPLE_RATE / step;
+  
+  let rateText;
+  if (currentRate >= 1000) {
+    rateText = (currentRate / 1000).toFixed(1) + " kHz";
+  } else {
+    rateText = currentRate.toFixed(0) + " Hz";
+  }
+
+  select("#sampleValue").html(rateText);
+}
+
       
       // ビット数表示を更新する関数
       function updateBitDepthDisplay() {
