@@ -29,18 +29,19 @@
       </div>
       <span id="fileStatus" style="color:blue;">音声ファイルを読み込んでください</span><br /><br />
 
-      <button id="processBtn" disabled>⚙️ 処理＆再生</button><br /><br />
+      <button id="processBtn" disabled>⚙️ 処理＆再生</button><br />
+      <button id="stopBtn" disabled>■ 再生を停止</button><br /><br />
       
       <label>元の音声再生:</label>
       <audio id="playback" controls disabled></audio><br /><br />
 
-      <label>標本化間隔：</label>
-      <input type="range" id="sampleSlider" min="1" max="20" value="1" />
-      <span id="sampleValue">1</span><br />
+      <label>標本化レート（間隔の目安）：</label>
+      <input type="range" id="sampleSlider" min="1" max="50" value="1" /> 
+      <span id="sampleValue">44.1k Hz</span><br />
 
       <label>量子化ビット数：</label>
-      <input type="range" id="bitSlider" min="2" max="16" value="8" />
-      <span id="bitValue">8</span><br /><br />
+      <input type="range" id="bitSlider" min="2" max="24" value="8" />
+      <span id="bitValue">8 bit</span><br /><br />
 
       <div id="waveContainer" style="margin-top:20px;">
         <h4>波形表示</h4>
@@ -48,8 +49,49 @@
     </main>
 
     <script>
-      let recordedBuffer = null; // アップロードされた音声のAudioBuffer
+      let recordedBuffer = null; 
       let waveform = [];
+      let currentSource = null; // 現在再生中のAudioBufferSourceNodeを保持する
+
+      // サンプリングレート表示を更新する
+      function updateSampleRateDisplay() {
+        const step = int(select("#sampleSlider").value());
+        // 基準サンプリングレートを44100Hzと仮定
+        const baseRate = 44100;
+        // 表示レートは、基準レートをステップ数で割った値。
+        // step=1: 44100Hz, step=50: 882Hz
+        const displayRate = baseRate / step;
+        
+        // 1000Hz以上はk Hzで表示
+        if (displayRate >= 1000) {
+            select("#sampleValue").html(`${(displayRate / 1000).toFixed(1)}k Hz`);
+        } else {
+            select("#sampleValue").html(`${displayRate.toFixed(0)} Hz`);
+        }
+      }
+      
+      // 再生ノードを停止する
+      function stopCurrentPlayback() {
+          if (currentSource) {
+              try {
+                  // stop()を呼び出して再生を停止
+                  currentSource.stop();
+              } catch (e) {
+                  // 再生が既に終了しているなどでエラーが出ても無視
+              } finally {
+                  currentSource = null;
+              }
+          }
+          select("#stopBtn").attribute("disabled", "true");
+          // ファイルステータスを元の状態に戻す
+          if (recordedBuffer) {
+              const duration = recordedBuffer.duration.toFixed(2);
+              select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
+          } else {
+              select("#fileStatus").html("音声ファイルを読み込んでください").style("color", "blue");
+          }
+      }
+
 
       function setup() {
         let cnv = createCanvas(600, 200);
@@ -60,13 +102,18 @@
 
         // イベントリスナーの設定
         select("#processBtn").mousePressed(processAndPlay);
+        select("#stopBtn").mousePressed(stopCurrentPlayback); // 停止ボタンの追加
 
-        select("#sampleSlider").input(() =>
-          select("#sampleValue").html(select("#sampleSlider").value())
-        );
+        select("#sampleSlider").input(() => {
+            updateSampleRateDisplay();
+        });
         select("#bitSlider").input(() =>
-          select("#bitValue").html(select("#bitSlider").value())
+          select("#bitValue").html(`${select("#bitSlider").value()} bit`)
         );
+
+        // 初期表示を更新
+        updateSampleRateDisplay(); 
+        select("#bitValue").html(`${select("#bitSlider").value()} bit`);
         
         // ファイルアップロード/ドロップのリスナー
         const fileInput = select("#fileInput");
@@ -74,7 +121,6 @@
 
         fileInput.changed(handleFileSelect);
         
-        // p5.jsのラッパー関数を使ってイベントを設定
         dropZone.dragOver(() => {
             dropZone.style("background-color", "#f0f0ff");
             return false;
@@ -82,14 +128,11 @@
         dropZone.dragLeave(() => {
             dropZone.style("background-color", "#fff");
         });
-        // drop イベントは p5.js の drop() を使う
         dropZone.drop(handleFileDrop);
       }
       
-      // p5.jsのdropイベントハンドラ。event.dataTransfer.filesはp5.Fileオブジェクトではないため、
-      // ネイティブの `event.dataTransfer.files` を直接使う。
       function handleFileDrop(event) {
-          event.preventDefault(); // ブラウザのデフォルト動作をキャンセル
+          event.preventDefault(); 
           select("#dropZone").style("background-color", "#fff");
           
           const files = event.dataTransfer.files;
@@ -98,7 +141,6 @@
           }
       }
 
-      // <input type="file"> 選択時の処理
       function handleFileSelect() {
           const file = this.elt.files[0];
           if (file) {
@@ -106,8 +148,9 @@
           }
       }
 
-      // メインのファイル処理とデコード
       async function handleFile(file) {
+          stopCurrentPlayback(); // 新しいファイル読み込み時に再生中の音を停止
+          
           if (!file.type.startsWith("audio/")) {
               select("#fileStatus").html("❌ 無効なファイル形式です。音声ファイルを選択してください。").style("color", "red");
               return;
@@ -120,16 +163,13 @@
           playback.attribute("src", "");
 
           try {
-              // ファイルをArrayBufferとして読み込み、Web Audio APIでデコード
               const arrayBuffer = await file.arrayBuffer();
               const ctx = getAudioContext();
               recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
 
-              // デコード成功後の処理
               const duration = recordedBuffer.duration.toFixed(2);
               select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
               
-              // <audio>タグで元の音声を再生できるように設定
               playback.attribute("src", URL.createObjectURL(file)); 
               playback.removeAttribute("disabled");
               
@@ -149,10 +189,8 @@
           text("ファイルを読み込んでください", width / 2, height / 2);
           return;
         }
-        // ... (波形描画ロジックは変更なし)
         const data = buffer.getChannelData(0);
         waveform = [];
-        // 幅600pxに合わせてデータを間引く
         const step = Math.floor(data.length / width); 
         for (let i = 0; i < data.length; i += step) {
           waveform.push(data[i]);
@@ -161,7 +199,6 @@
       }
 
       function drawWaveformArray(arr) {
-        // ... (波形配列描画ロジックは変更なし)
         background(255);
         stroke(0);
         noFill();
@@ -175,6 +212,9 @@
 
       function processAndPlay() {
         if (!recordedBuffer) return alert("音声データが読み込まれていません。");
+        
+        // **【重要】再生開始前に前回のノードを停止**
+        stopCurrentPlayback(); 
 
         const sampleStep = int(select("#sampleSlider").value());
         const bitDepth = int(select("#bitSlider").value());
@@ -189,7 +229,7 @@
           const input = recordedBuffer.getChannelData(ch);
           const output = newBuffer.getChannelData(ch);
           
-          let lastValue = 0; // ホールド用
+          let lastValue = 0;
 
           for (let i = 0; i < length; i++) {
             if (i % sampleStep === 0) {
@@ -214,11 +254,17 @@
         src.connect(ctx.destination);
         src.start(0); 
         
+        // **再生ノードの参照を保持**
+        currentSource = src;
+        select("#stopBtn").removeAttribute("disabled");
+
         select("#fileStatus").html("処理後の音を再生中...").style("color", "darkorange");
+        
+        // 再生が終了したらノードの参照を解放
         src.onended = () => {
-            // 再生終了後、元のステータスに戻す
-            const duration = recordedBuffer.duration.toFixed(2);
-            select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
+            if (currentSource === src) {
+                stopCurrentPlayback(); // 状態をリセット
+            }
         };
       }
 
