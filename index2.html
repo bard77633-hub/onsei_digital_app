@@ -67,14 +67,15 @@
       const BASE_SAMPLE_RATE = 44100;
       const MAX_STEP = 50;
       const FIXED_GAIN = 4.0; 
+      let MIME_TYPE = 'audio/webm; codecs=opus'; // ブラウザ互換性の高い形式
 
       function getAudioContext() {
           if (!audioContext) {
-              // ユーザー操作時にコンテキストをアクティブ化するための安全策
               audioContext = new (window.AudioContext || window.webkitAudioContext)();
-              if (audioContext.state === 'suspended') {
-                  audioContext.resume();
-              }
+          }
+          // 【修正1】AudioContextが停止状態の場合、強制的に再開を試みる
+          if (audioContext.state === 'suspended') {
+              audioContext.resume().catch(e => console.error("AudioContext resume failed:", e));
           }
           return audioContext;
       }
@@ -175,21 +176,35 @@
 
         // 最初のクリックでAudioContextを再開する処理（モバイル対策）
         document.addEventListener('click', () => {
-          const ctx = getAudioContext();
+          getAudioContext();
         }, { once: true });
       }
       
-      // 【修正】録音開始: constraintsをシンプル化し、互換性を高める
+      // 【修正2】MediaRecorderにMIMEタイプを明示的に指定
       async function startRecording() {
           stopCurrentPlayback(); 
           audioChunks = [];
 
+          // 互換性チェック
+          if (MediaRecorder.isTypeSupported('audio/webm; codecs=opus')) {
+              MIME_TYPE = 'audio/webm; codecs=opus';
+          } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+              MIME_TYPE = 'audio/mp4'; // Safari対策
+          } else if (MediaRecorder.isTypeSupported('audio/wav')) {
+              MIME_TYPE = 'audio/wav'; 
+          } else {
+              MIME_TYPE = ''; // フォールバック
+          }
+
+
           try {
+              // マイクアクセスをリクエスト
               currentStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-              mediaRecorder = new MediaRecorder(currentStream);
+              
+              // MIMEタイプを指定してMediaRecorderを初期化
+              mediaRecorder = new MediaRecorder(currentStream, { mimeType: MIME_TYPE });
               
               mediaRecorder.ondataavailable = event => {
-                  // チャンクが空でないことを確認
                   if (event.data.size > 0) {
                       audioChunks.push(event.data);
                   }
@@ -215,35 +230,34 @@
           if (mediaRecorder && mediaRecorder.state !== "inactive") {
               mediaRecorder.stop();
               
-              // マイクストリームを停止し、デバイスの使用を解放
               currentStream.getTracks().forEach(track => track.stop());
               
               select("#recordStartBtn").removeAttribute("disabled");
               select("#recordStopBtn").attribute("disabled", "true");
-              // 録音停止後、すぐに「処理中」の状態を出す
               select("#fileStatus").html("💾 録音データ処理中... しばらくお待ちください").style("color", "blue");
           }
       }
       
-      // 【修正】録音データ処理: Blobのtype指定を削除し、decodeAudioDataの処理を確実にする
       async function handleRecordedData() {
           if (audioChunks.length === 0) {
               select("#fileStatus").html("❌ 録音データが見つかりません。").style("color", "red");
               return;
           }
 
-          // Blobタイプを指定しないことで、MediaRecorderが使用したネイティブフォーマットを使用させる
-          const audioBlob = new Blob(audioChunks); 
+          // Blobタイプを明示的に指定する
+          const audioBlob = new Blob(audioChunks, { type: MIME_TYPE });
           
           const arrayBuffer = await audioBlob.arrayBuffer();
           const ctx = getAudioContext();
           
           try {
-              // ここで処理が完了するまで待機する
+              // AudioContextの処理が失敗しないように、ここで再開を試みる（冗長だが重要）
+              await ctx.resume();
+              
               recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
               processedBuffer = null;
               
-              // 再生プレビューのソースをBlobとして設定
+              // 再生プレビュー
               const playback = select("#playback");
               playback.attribute("src", URL.createObjectURL(audioBlob)); 
               playback.removeAttribute("disabled");
@@ -255,7 +269,8 @@
               select("#processBtn").removeAttribute("disabled");
 
           } catch (e) {
-              select("#fileStatus").html(`❌ 録音データのデコードエラー: ${e.message}`).style("color", "red");
+              console.error("Decode Audio Data Error:", e);
+              select("#fileStatus").html(`❌ 録音データのデコードエラー: ${e.message}。フォーマットが対応していない可能性があります。`).style("color", "red");
               recordedBuffer = null;
           }
       }
@@ -294,6 +309,7 @@
           try {
               const arrayBuffer = await file.arrayBuffer();
               const ctx = getAudioContext();
+              await ctx.resume(); // ファイルデコード前にも再開を試みる
               recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
               processedBuffer = null;
 
