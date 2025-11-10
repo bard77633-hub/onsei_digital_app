@@ -35,14 +35,13 @@
       <label>元の音声再生:</label>
       <audio id="playback" controls disabled></audio><br /><br />
 
-<label>標本化レート（8kHz〜44.1kHz）：</label>
-<input type="range" id="sampleSlider" min="8000" max="44100" value="44100" step="1000" />
-<span id="sampleValue"></span><br />
+      <label>標本化レート（低レート ← **高音質** → 高レート）：</label>
+      <input type="range" id="sampleSlider" min="1" max="50" value="50" /> 
+      <span id="sampleValue"></span><br />
 
-<label>量子化ビット数（2〜24 bit）：</label>
-<input type="range" id="bitSlider" min="2" max="24" value="16" />
-<span id="bitValue"></span><br /><br />
-
+      <label>量子化ビット数（2 bit ← **高音質** → 24 bit）：</label>
+      <input type="range" id="bitSlider" min="2" max="24" value="8" />
+      <span id="bitValue"></span><br /><br />
 
       <div id="waveContainer" style="margin-top:20px;">
         <h4>波形表示</h4>
@@ -54,26 +53,30 @@
       let waveform = [];
       let currentSource = null; 
       const BASE_SAMPLE_RATE = 44100; // 基準サンプリングレート（Hz）
+      const MAX_STEP = 50; // スライダーのmax値
 
-// サンプリングレート表示を更新する関数（改良版）
-function updateSampleRateDisplay() {
-  const step = int(select("#sampleSlider").value());
-  const currentRate = BASE_SAMPLE_RATE / step;
-  
-  let rateText;
-  if (currentRate >= 1000) {
-    rateText = (currentRate / 1000).toFixed(1) + " kHz";
-  } else {
-    rateText = currentRate.toFixed(0) + " Hz";
-  }
+      // サンプリングレート表示を更新する関数
+      function updateSampleRateDisplay() {
+        const sliderValue = int(select("#sampleSlider").value());
+        // 【反転ロジック】 sliderValue (1..50) -> sampleStep (50..1)
+        const sampleStep = MAX_STEP - sliderValue + 1; 
 
-  select("#sampleValue").html(rateText);
-}
+        const currentRate = BASE_SAMPLE_RATE / sampleStep;
+        
+        let rateText;
+        if (currentRate >= 1000) {
+          rateText = (currentRate / 1000).toFixed(1) + " kHz";
+        } else {
+          rateText = currentRate.toFixed(0) + " Hz";
+        }
 
-      
+        const minRate = (BASE_SAMPLE_RATE / MAX_STEP).toFixed(0);
+        select("#sampleValue").html(`${rateText} (範囲: ${minRate} Hz 〜 44.1 kHz)`);
+      }
+
       // ビット数表示を更新する関数
       function updateBitDepthDisplay() {
-          select("#bitValue").html(`${select("#bitSlider").value()} bit`);
+        select("#bitValue").html(`${select("#bitSlider").value()} bit`);
       }
 
       // 再生ノードを停止する関数
@@ -216,7 +219,10 @@ function updateSampleRateDisplay() {
         
         stopCurrentPlayback(); 
 
-        const sampleStep = int(select("#sampleSlider").value());
+        const sliderValue = int(select("#sampleSlider").value());
+        // 【反転ロジックを適用】
+        const sampleStep = MAX_STEP - sliderValue + 1; 
+
         const bitDepth = int(select("#bitSlider").value());
         const ctx = getAudioContext();
 
