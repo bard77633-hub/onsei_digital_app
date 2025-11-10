@@ -1,143 +1,118 @@
 <!DOCTYPE html>
 <html lang="ja">
-<head>
-  <meta charset="UTF-8" />
-  <title>音のデジタル化を体験しよう</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
-  <style>
-    body { font-family: "Segoe UI", sans-serif; text-align: center; background: #f8f8f8; }
-    h2 { margin-top: 10px; }
-    #controls { margin: 15px auto; padding: 10px; background: white; width: 80%; border-radius: 12px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
-    label { display: block; margin: 8px; }
-    canvas { margin-top: 15px; border-radius: 12px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
-    button { margin: 8px; padding: 6px 12px; border: none; border-radius: 6px; background-color: #4CAF50; color: white; cursor: pointer; }
-    button:hover { background-color: #45a049; }
-    input[type=range] { width: 200px; }
-    #recordBtn.recording { background-color: red; animation: blink 1s infinite; }
-    @keyframes blink { 0%, 50%, 100% { opacity: 1; } 25%, 75% { opacity: 0.3; } }
-  </style>
-</head>
-<body>
-  <h2>音のデジタル化を体験しよう</h2>
-  <div id="controls">
-    <label>① 音声を選択：
-      <button id="loadSample">サンプル音声</button>
-      <button id="recordBtn">録音開始🎤</button>
-    </label>
-    <label>② 標本化周波数（kHz）：
-      <input id="sampleRate" type="range" min="4" max="44" step="4" value="44">
-      <span id="srLabel">44</span>kHz
-    </label>
-    <label>③ 量子化ビット数（bit）：
-      <input id="bitDepth" type="range" min="4" max="16" step="4" value="16">
-      <span id="bdLabel">16</span>bit
-    </label>
-    <button id="playBtn" disabled>再生 ▶</button>
-  </div>
+  <head>
+    <meta charset="UTF-8" />
+    <title>音のデジタル化体験アプリ（p5.js版）</title>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/addons/p5.sound.min.js"></script>
+  </head>
+  <body>
+    <main style="text-align:center;">
+      <h2>🎧 音のデジタル化体験</h2>
+      <p>録音またはサンプル音を使って、標本化と量子化の影響を体験しよう。</p>
 
-  <script>
-    let soundFile;
-    let mic, recorder, recordedSound;
-    let isRecording = false;
-    let waveform = [];
-    let canvasW = 600, canvasH = 200;
+      <button id="recordBtn">🎙️ 録音開始</button>
+      <button id="playSampleBtn">▶ サンプル音再生</button>
+      <br><br>
 
-    function setup() {
-      let cnv = createCanvas(canvasW, canvasH);
-      cnv.parent(document.body);
-      background(240);
-      textAlign(CENTER, CENTER);
-      text("ここに波形が表示されます", width / 2, height / 2);
+      <label>標本化間隔（粗くすると音が劣化）：</label><br />
+      <input type="range" id="sampleSlider" min="1" max="20" value="1" />
+      <span id="sampleValue">1</span><br /><br />
 
-      select("#sampleRate").input(() => select("#srLabel").html(select("#sampleRate").value()));
-      select("#bitDepth").input(() => select("#bdLabel").html(select("#bitDepth").value()));
+      <label>量子化ビット数（小さいほど音が劣化）：</label><br />
+      <input type="range" id="bitSlider" min="2" max="16" value="8" />
+      <span id="bitValue">8</span><br /><br />
 
-      select("#loadSample").mousePressed(loadSampleSound);
-      select("#recordBtn").mousePressed(toggleRecording);
-      select("#playBtn").mousePressed(playProcessed);
-    }
+      <audio id="playback" controls></audio>
+    </main>
 
-    function draw() {
-      if (waveform.length > 0) {
-        background(255);
-        noFill();
-        stroke(0);
-        beginShape();
-        for (let i = 0; i < waveform.length; i++) {
-          let x = map(i, 0, waveform.length, 0, width);
-          let y = map(waveform[i], -1, 1, height, 0);
-          vertex(x, y);
-        }
-        endShape();
+    <script>
+      let mic, recorder, soundFile;
+      let isRecording = false;
+      let sampleSlider, bitSlider;
+
+      function setup() {
+        noCanvas();
+        sampleSlider = select('#sampleSlider');
+        bitSlider = select('#bitSlider');
+
+        select('#recordBtn').mousePressed(toggleRecording);
+        select('#playSampleBtn').mousePressed(playSample);
+
+        select('#sampleSlider').input(() =>
+          select('#sampleValue').html(sampleSlider.value())
+        );
+        select('#bitSlider').input(() =>
+          select('#bitValue').html(bitSlider.value())
+        );
+
+        mic = new p5.AudioIn();
+        recorder = new p5.SoundRecorder();
+        soundFile = new p5.SoundFile();
+
+        recorder.setInput(mic);
       }
-    }
 
-    function loadSampleSound() {
-      soundFile = loadSound("https://cdn.jsdelivr.net/gh/johnrobinsn/sample_audio@main/hello.wav", () => {
-        waveform = soundFile.getPeaks(1000);
-        select("#playBtn").removeAttribute("disabled");
-      });
-    }
+      async function toggleRecording() {
+        const btn = select('#recordBtn');
 
-    async function toggleRecording() {
-      let btn = select("#recordBtn");
-
-      if (!isRecording) {
-        // 録音開始
-        try {
-          mic = new p5.AudioIn();
-          await mic.start();
-          recorder = new p5.SoundRecorder();
-          recorder.setInput(mic);
-          recordedSound = new p5.SoundFile();
-          recorder.record(recordedSound);
-
-          btn.html("録音停止 ■");
-          btn.addClass("recording");
+        if (!isRecording) {
+          await userStartAudio(); // 必要：ブラウザで音声入力許可を要求
+          mic.start();
+          recorder.record(soundFile);
           isRecording = true;
-        } catch (err) {
-          alert("マイクが使用できません。ブラウザのマイク権限を確認してください。");
+          btn.html('⏹️ 録音停止');
+        } else {
+          recorder.stop();
+          mic.stop();
+          isRecording = false;
+          btn.html('🎙️ 録音開始');
+          applyEffectsAndPlay(soundFile.buffer);
         }
-      } else {
-        // 録音停止
-        recorder.stop();
-        waveform = [];
-        btn.html("録音開始 🎤");
-        btn.removeClass("recording");
-        isRecording = false;
-        select("#playBtn").removeAttribute("disabled");
-      }
-    }
-
-    function playProcessed() {
-      let src = soundFile || recordedSound;
-      if (!src) return alert("音声を選択または録音してください。");
-
-      let sr = int(select("#sampleRate").value()) * 1000;
-      let bits = int(select("#bitDepth").value());
-      let raw = src.buffer.getChannelData(0);
-
-      let step = floor(src.sampleRate() / sr);
-      let newData = [];
-      for (let i = 0; i < raw.length; i += step) newData.push(raw[i]);
-
-      let levels = pow(2, bits);
-      for (let i = 0; i < newData.length; i++) {
-        newData[i] = round((newData[i] + 1) / 2 * (levels - 1)) / (levels - 1) * 2 - 1;
       }
 
-      waveform = newData.slice(0, 1000);
+      // サンプル音：短い正弦波
+      function playSample() {
+        const ctx = getAudioContext();
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = 440; // A4
+        const gain = ctx.createGain();
+        gain.gain.value = 0.2;
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 1.0);
+      }
 
-      let audioCtx = getAudioContext();
-      let buffer = audioCtx.createBuffer(1, newData.length, sr);
-      buffer.copyToChannel(new Float32Array(newData), 0);
+      function applyEffectsAndPlay(buffer) {
+        // サンプリング間隔・ビット深度を取得
+        const sampleStep = int(sampleSlider.value());
+        const bitDepth = int(bitSlider.value());
 
-      let srcNode = audioCtx.createBufferSource();
-      srcNode.buffer = buffer;
-      srcNode.connect(audioCtx.destination);
-      srcNode.start();
-    }
-  </script>
-</body>
-</html>
+        const numChannels = buffer.numberOfChannels;
+        const length = buffer.length;
+        const sampleRate = buffer.sampleRate;
+        const newBuffer = getAudioContext().createBuffer(numChannels, length, sampleRate);
+
+        for (let ch = 0; ch < numChannels; ch++) {
+          const input = buffer.getChannelData(ch);
+          const output = newBuffer.getChannelData(ch);
+
+          for (let i = 0; i < length; i++) {
+            if (i % sampleStep === 0) {
+              // 量子化処理
+              const quant = Math.pow(2, bitDepth);
+              let val = Math.round(input[i] * (quant / 2)) / (quant / 2);
+              output[i] = val;
+            } else {
+              // 前の値を保持
+              output[i] = output[i - 1] || 0;
+            }
+          }
+        }
+
+        // 再生用に変換
+        const playback = document.getElementById('playback');
+        const ctx = getAudioContext();
+        const dest = ctx.createMediaStreamDestination();
+        const source
