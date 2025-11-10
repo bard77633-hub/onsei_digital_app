@@ -60,9 +60,10 @@
       let audioContext = null; 
       let startTime = 0; 
       
-      let mic;
-      let recorder;
-      let soundFile;
+      // 【変更】MediaRecorder関連オブジェクト
+      let mediaRecorder;
+      let audioChunks = [];
+      let currentStream; 
 
       const BASE_SAMPLE_RATE = 44100;
       const MAX_STEP = 50;
@@ -143,19 +144,15 @@
 
         noLoop(); 
         
-        // p5.sound 録音関連オブジェクトの初期化
-        mic = new p5.AudioIn();
-        recorder = new p5.SoundRecorder();
-        soundFile = new p5.SoundFile();
-        recorder.setInput(mic);
-        mic.start(); // ブラウザにマイク許可を求める
-
+        // p5.soundの初期化（micは使わないが、p5.soundライブラリは残す）
+        
         // イベントリスナーの設定
         select("#processBtn").mousePressed(processAndPlay);
         select("#stopBtn").mousePressed(stopCurrentPlayback); 
         select("#sampleSlider").input(updateSampleRateDisplay);
         select("#bitSlider").input(updateBitDepthDisplay);
         
+        // 録音ボタンのイベントリスナー
         select("#recordStartBtn").mousePressed(startRecording);
         select("#recordStopBtn").mousePressed(stopRecording);
 
@@ -176,73 +173,82 @@
         dropZone.drop(handleFileDrop);
       }
       
-      function startRecording() {
-        if (mic.enabled) {
+      // 【変更】録音開始: MediaRecorderを使用
+      async function startRecording() {
           stopCurrentPlayback(); 
-          
-          // 録音前の古い soundFile を初期化
-          soundFile = new p5.SoundFile();
-          recorder.record(soundFile);
-          
-          select("#recordStartBtn").attribute("disabled", "true");
-          select("#recordStopBtn").removeAttribute("disabled");
-          select("#fileStatus").html("🔴 録音中... マイクに向かって話してください").style("color", "red");
-          select("#processBtn").attribute("disabled", "true");
-        } else {
-          mic.start(); 
-          select("#fileStatus").html("マイクの使用を許可してください").style("color", "orange");
-        }
+          audioChunks = [];
+
+          try {
+              currentStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              mediaRecorder = new MediaRecorder(currentStream);
+              
+              mediaRecorder.ondataavailable = event => {
+                  audioChunks.push(event.data);
+              };
+
+              mediaRecorder.onstop = () => {
+                  handleRecordedData();
+              };
+
+              mediaRecorder.start();
+              
+              select("#recordStartBtn").attribute("disabled", "true");
+              select("#recordStopBtn").removeAttribute("disabled");
+              select("#fileStatus").html("🔴 録音中... マイクに向かって話してください").style("color", "red");
+              select("#processBtn").attribute("disabled", "true");
+
+          } catch (err) {
+              select("#fileStatus").html(`❌ マイクアクセスエラー: ${err.name} - ${err.message}`).style("color", "red");
+          }
       }
 
+      // 【変更】録音停止: MediaRecorderを停止
       function stopRecording() {
-        recorder.stop(); // 録音を停止
-        
-        select("#recordStartBtn").removeAttribute("disabled");
-        select("#recordStopBtn").attribute("disabled", "true");
-        select("#fileStatus").html("💾 録音データ処理中...").style("color", "blue");
-
-        // 録音後の処理を非同期で行う
-        handleSoundFile(soundFile);
+          if (mediaRecorder && mediaRecorder.state !== "inactive") {
+              mediaRecorder.stop();
+              
+              // マイクストリームを停止し、デバイスの使用を解放
+              currentStream.getTracks().forEach(track => track.stop());
+              
+              select("#recordStartBtn").removeAttribute("disabled");
+              select("#recordStopBtn").attribute("disabled", "true");
+              select("#fileStatus").html("💾 録音データ処理中...").style("color", "blue");
+          }
       }
       
-      // 【修正】p5.SoundFileからAudioBufferへの変換と処理を改善
-      function handleSoundFile(sf) {
+      // 【変更】録音データ処理: BlobとdecodeAudioDataを使用
+      async function handleRecordedData() {
+          if (audioChunks.length === 0) {
+              select("#fileStatus").html("❌ 録音データが見つかりません。").style("color", "red");
+              return;
+          }
+
+          const audioBlob = new Blob(audioChunks, { type: 'audio/wav' }); // wavまたはmediaRecorder.mimeTypeを使用
+          
+          // BlobをArrayBufferに変換
+          const arrayBuffer = await audioBlob.arrayBuffer();
           const ctx = getAudioContext();
           
-          // toBufferを使用してデータを取得。これは非同期に行われる。
-          // sf.buffer がまだ null の可能性があるため、toBuffer のコールバックを使用する。
-          sf.toBuffer(function(p5Buffer) {
-              if (!p5Buffer) {
-                  select("#fileStatus").html("❌ 録音データが見つかりません。").style("color", "red");
-                  return;
-              }
-
-              // Web Audio APIのAudioBufferに変換してコピー
-              const numChannels = p5Buffer.numberOfChannels;
-              const length = p5Buffer.length;
-              const sampleRate = p5Buffer.sampleRate;
+          // ファイルアップロードと同じ安全なパスでデコードする
+          try {
+              recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
+              processedBuffer = null;
               
-              // p5.soundのバッファのサンプリングレートを使用
-              recordedBuffer = ctx.createBuffer(numChannels, length, sampleRate);
-
-              for (let ch = 0; ch < numChannels; ch++) {
-                  // p5.Bufferから新しいAudioBufferにデータをコピー
-                  recordedBuffer.copyToChannel(p5Buffer.getChannelData(ch), ch, 0);
-              }
-              
-              // 再生プレビューのソースをBlobとして生成し、再生可能にする
-              sf.getBlob('audio/wav', function(blob) {
-                  const playback = select("#playback");
-                  playback.attribute("src", URL.createObjectURL(blob));
-                  playback.removeAttribute("disabled");
-              });
+              // 再生プレビューのソースをBlobとして設定
+              const playback = select("#playback");
+              playback.attribute("src", URL.createObjectURL(audioBlob)); 
+              playback.removeAttribute("disabled");
 
               const duration = recordedBuffer.duration.toFixed(2);
               select("#fileStatus").html(`✅ 録音完了 (${duration} 秒)`).style("color", "green");
               
               drawWaveform(recordedBuffer);
               select("#processBtn").removeAttribute("disabled");
-          });
+
+          } catch (e) {
+              select("#fileStatus").html(`❌ 録音データのデコードエラー: ${e.message}`).style("color", "red");
+              recordedBuffer = null;
+          }
       }
 
       
@@ -262,6 +268,7 @@
           }
       }
 
+      // ファイルアップロード時の処理（録音データのデコードパスと同じ）
       async function handleFile(file) {
           stopCurrentPlayback(); 
           
