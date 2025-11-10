@@ -50,16 +50,15 @@
 
     <script>
       let recordedBuffer = null; 
-      let processedBuffer = null; // 処理後のバッファを格納
+      let processedBuffer = null; 
       let waveform = [];
       let currentSource = null; 
-      let audioContext = null; // AudioContextを保持する
-      let startTime = 0; // 再生開始時刻 (AudioContext.currentTime)
+      let audioContext = null; 
+      let startTime = 0; 
       
       const BASE_SAMPLE_RATE = 44100;
       const MAX_STEP = 50;
 
-      // AudioContextを初期化または取得
       function getAudioContext() {
           if (!audioContext) {
               audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -67,7 +66,6 @@
           return audioContext;
       }
 
-      // 標本化ステップを計算する関数
       function calculateSampleStep(sliderValue) {
           const normalized = (sliderValue - 1) / (MAX_STEP - 1);
           const reverseNormalized = 1 - normalized; 
@@ -119,8 +117,8 @@
               select("#fileStatus").html("音声ファイルを読み込んでください").style("color", "blue");
           }
           
-          // 【修正点3: 再生停止時にdraw()ループを止める】
-          noLoop();
+          // 再生停止時にdraw()ループを止める
+          noLoop(); 
           // ハイライトなしで波形を再描画
           if(processedBuffer) {
               drawWaveform(processedBuffer, -1); 
@@ -131,13 +129,14 @@
 
 
       function setup() {
+        // キャンバスのサイズ設定
         let cnv = createCanvas(600, 400); 
         cnv.parent("waveContainer");
         background(240);
         textAlign(CENTER);
         text("ファイルを読み込むと波形がここに表示されます", width / 2, height / 2);
 
-        // 【修正点4: draw()の自動実行を停止】
+        // draw()の自動実行を停止（再生開始時に再開する）
         noLoop(); 
         
         select("#processBtn").mousePressed(processAndPlay);
@@ -163,7 +162,6 @@
         dropZone.drop(handleFileDrop);
       }
       
-      // ... handleFileDrop, handleFileSelect, handleFile は変更なし ...
       function handleFileDrop(event) {
           event.preventDefault(); 
           select("#dropZone").style("background-color", "#fff");
@@ -198,7 +196,7 @@
               const arrayBuffer = await file.arrayBuffer();
               const ctx = getAudioContext();
               recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
-              processedBuffer = null; // 新規ファイルで処理済みバッファをリセット
+              processedBuffer = null;
 
               const duration = recordedBuffer.duration.toFixed(2);
               select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
@@ -206,7 +204,7 @@
               playback.attribute("src", URL.createObjectURL(file)); 
               playback.removeAttribute("disabled");
               
-              drawWaveform(recordedBuffer); // 元の波形を表示
+              drawWaveform(recordedBuffer);
               select("#processBtn").removeAttribute("disabled");
 
           } catch (e) {
@@ -218,7 +216,6 @@
       }
 
 
-      // 【drawWaveformの修正: ハイライトインデックス引数の追加】
       function drawWaveform(buffer, highlightIndex = -1) {
         if (!buffer) {
           background(255);
@@ -227,6 +224,7 @@
         }
         const data = buffer.getChannelData(0);
         waveform = [];
+        // 幅600pxに合わせてデータを間引く
         const step = Math.floor(data.length / width); 
         for (let i = 0; i < data.length; i += step) {
           waveform.push(data[i]);
@@ -235,12 +233,12 @@
         drawWaveformArray(waveform, highlightIndex);
       }
 
-      // 【drawWaveformArrayの修正: ハイライトインデックス引数の受け取り】
       function drawWaveformArray(arr, highlightIndex) {
-        background(255);
+        background(255); // 【重要】毎フレーム背景をクリア
         
         // 通常の波形を描画
         stroke(0);
+        strokeWeight(1);
         noFill();
         beginShape();
         for (let x = 0; x < arr.length; x++) {
@@ -249,7 +247,7 @@
         }
         endShape();
 
-        // 【修正点5: 再生位置のハイライト表示】
+        // 【修正点：再生位置のハイライト表示】
         if (highlightIndex >= 0) {
             stroke(255, 0, 0); // 赤色
             strokeWeight(2);
@@ -295,16 +293,14 @@
           }
         }
         
-        // 処理後のバッファをグローバル変数に保持
         processedBuffer = newBuffer;
 
-        drawWaveform(processedBuffer);
+        drawWaveform(processedBuffer); // 初期波形を描画
         
         const src = ctx.createBufferSource();
         src.buffer = processedBuffer;
         src.connect(ctx.destination);
         
-        // 【修正点6: 再生開始時刻を記録】
         startTime = ctx.currentTime;
         src.start(0); 
         
@@ -312,7 +308,7 @@
         select("#stopBtn").removeAttribute("disabled");
         select("#fileStatus").html("処理後の音を再生中...").style("color", "darkorange");
         
-        // 【修正点7: draw()の実行を再開】
+        // draw()の実行を再開
         loop();
 
         src.onended = () => {
@@ -322,10 +318,9 @@
         };
       }
 
-      // 【修正点8: リアルタイム描画ロジック】
       function draw() {
         if (!currentSource || !processedBuffer) {
-            noLoop(); // 再生中でなければ停止
+            noLoop(); 
             return;
         }
 
@@ -333,10 +328,14 @@
         // 経過時間 (秒) = 現在時刻 - 再生開始時刻
         const elapsedTime = ctx.currentTime - startTime;
         
-        // AudioBufferの長さを基準にした経過インデックス
-        const totalDuration = processedBuffer.duration;
-        
+        // 再生が終了したら自動停止
+        if (elapsedTime > processedBuffer.duration) {
+             stopCurrentPlayback();
+             return;
+        }
+
         // キャンバス幅（600px）を基準にした現在のX座標を計算
+        const totalDuration = processedBuffer.duration;
         let currentIndex = map(elapsedTime, 0, totalDuration, 0, width);
         
         // 波形を再描画し、現在位置をハイライト
