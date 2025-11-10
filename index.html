@@ -53,14 +53,42 @@
       let waveform = [];
       let currentSource = null; 
       const BASE_SAMPLE_RATE = 44100; // 基準サンプリングレート（Hz）
-      const MAX_STEP = 50; // スライダーのmax値
+      const MAX_STEP = 50; // スライダーの最大ステップ数
+
+      // 標本化ステップを対数スケールで計算する関数
+      function calculateSampleStep(sliderValue) {
+          const sliderMin = 1;
+          const sliderMax = 50;
+          
+          // スライダーの値を 0 から 1 の範囲に正規化 (0: 低音質/左端, 1: 高音質/右端)
+          const normalized = (sliderValue - sliderMin) / (sliderMax - sliderMin);
+          
+          // normalizedが小さいときに大きな値を取り、大きいときに小さな値を取るように反転させる
+          const reverseNormalized = 1 - normalized; // 0 (右端) から 1 (左端) へ
+
+          // 対数スケールを設定
+          const minStep = 1; // 最小ステップ (高音質)
+          const maxStep = MAX_STEP; // 最大ステップ (低音質)
+
+          // 指数関数的に値をマッピング (知覚的に線形になるように)
+          const logMin = Math.log(minStep); // log(1) = 0
+          const logMax = Math.log(maxStep); // log(50)
+          
+          // 逆正規化値に基づいて対数スケールの位置を決定
+          const logStep = logMin + (logMax - logMin) * reverseNormalized;
+
+          // 最終的な間引きステップを計算 (小数点以下を四捨五入)
+          const sampleStep = Math.round(Math.exp(logStep));
+          
+          // 最小ステップ（1）より小さくならないようにする
+          return Math.max(minStep, sampleStep); 
+      }
 
       // サンプリングレート表示を更新する関数
       function updateSampleRateDisplay() {
         const sliderValue = int(select("#sampleSlider").value());
-        // 【反転ロジック】 sliderValue (1..50) -> sampleStep (50..1)
-        const sampleStep = MAX_STEP - sliderValue + 1; 
-
+        const sampleStep = calculateSampleStep(sliderValue); 
+        
         const currentRate = BASE_SAMPLE_RATE / sampleStep;
         
         let rateText;
@@ -85,7 +113,7 @@
               try {
                   currentSource.stop();
               } catch (e) {
-                  // エラーは無視
+                  // 再生が既に終了しているなどでエラーが出ても無視
               } finally {
                   currentSource = null;
               }
@@ -220,8 +248,8 @@
         stopCurrentPlayback(); 
 
         const sliderValue = int(select("#sampleSlider").value());
-        // 【反転ロジックを適用】
-        const sampleStep = MAX_STEP - sliderValue + 1; 
+        // 対数的に調整された標本化ステップを使用
+        const sampleStep = calculateSampleStep(sliderValue); 
 
         const bitDepth = int(select("#bitSlider").value());
         const ctx = getAudioContext();
