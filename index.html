@@ -2,22 +2,36 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <title>音のデジタル化体験（録音時間表示付き）</title>
+    <title>音のデジタル化体験（ファイルアップロード）</title>
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/addons/p5.sound.min.js"></script>
+    <style>
+      #dropZone {
+        border: 2px dashed #ccc;
+        border-radius: 10px;
+        padding: 30px;
+        margin-bottom: 20px;
+        text-align: center;
+        transition: background-color 0.3s;
+        cursor: pointer;
+      }
+    </style>
   </head>
   <body>
     <main style="text-align:center;">
       <h2>🎙️ 音のデジタル化体験</h2>
-      <p>録音またはサンプル音を使って、標本化と量子化の影響を体験しよう。</p>
+      <p>音声ファイルをアップロードして、標本化と量子化の影響を体験しよう。</p>
 
-      <button id="recordBtn">🎧 録音開始</button>
-      <span id="recStatus" style="margin-left:10px; color:blue;">停止中</span><br />
-      <span id="recTime" style="color:darkred;"></span><br /><br />
+      <div id="dropZone" ondragover="return false;">
+        ファイルをここにドラッグ＆ドロップ、または<br />
+        <label for="fileInput" style="color: blue; text-decoration: underline;">クリックしてファイルを選択</label>
+        <input type="file" id="fileInput" accept="audio/*" style="display: none;" />
+      </div>
+      <span id="fileStatus" style="color:blue;">音声ファイルを読み込んでください</span><br /><br />
 
-      <button id="playSampleBtn">▶ サンプル音再生</button>
       <button id="processBtn" disabled>⚙️ 処理＆再生</button><br /><br />
-      <label>元の録音音声:</label>
+      
+      <label>元の音声再生:</label>
       <audio id="playback" controls disabled></audio><br /><br />
 
       <label>標本化間隔：</label>
@@ -34,27 +48,17 @@
     </main>
 
     <script>
-      // グローバル変数を定義
-      let micStream;
-      let mediaRecorder;
-      let chunks = [];
-      let recordedBuffer; // Web Audio API用のAudioBuffer
-      let recordedBlob;   // <audio>タグ用のBlob
+      let recordedBuffer = null; // アップロードされた音声のAudioBuffer
       let waveform = [];
-      let recordStartTime = 0;
-      let recordTimer;
-      let p5cnv;
 
       function setup() {
-        p5cnv = createCanvas(600, 200);
-        p5cnv.parent("waveContainer");
+        let cnv = createCanvas(600, 200);
+        cnv.parent("waveContainer");
         background(240);
         textAlign(CENTER);
-        text("録音またはサンプル再生後に波形がここに表示されます", width / 2, height / 2);
+        text("ファイルを読み込むと波形がここに表示されます", width / 2, height / 2);
 
         // イベントリスナーの設定
-        select("#recordBtn").mousePressed(toggleRecording);
-        select("#playSampleBtn").mousePressed(playSample);
         select("#processBtn").mousePressed(processAndPlay);
 
         select("#sampleSlider").input(() =>
@@ -63,107 +67,93 @@
         select("#bitSlider").input(() =>
           select("#bitValue").html(select("#bitSlider").value())
         );
+        
+        // ファイルアップロード/ドロップのリスナー
+        const fileInput = select("#fileInput");
+        const dropZone = select("#dropZone");
+
+        fileInput.changed(handleFileSelect);
+        
+        // p5.jsのラッパー関数を使ってイベントを設定
+        dropZone.dragOver(() => {
+            dropZone.style("background-color", "#f0f0ff");
+            return false;
+        });
+        dropZone.dragLeave(() => {
+            dropZone.style("background-color", "#fff");
+        });
+        // drop イベントは p5.js の drop() を使う
+        dropZone.drop(handleFileDrop);
+      }
+      
+      // p5.jsのdropイベントハンドラ。event.dataTransfer.filesはp5.Fileオブジェクトではないため、
+      // ネイティブの `event.dataTransfer.files` を直接使う。
+      function handleFileDrop(event) {
+          event.preventDefault(); // ブラウザのデフォルト動作をキャンセル
+          select("#dropZone").style("background-color", "#fff");
+          
+          const files = event.dataTransfer.files;
+          if (files.length > 0) {
+              handleFile(files[0]);
+          }
       }
 
-      async function toggleRecording() {
-        const btn = select("#recordBtn");
-        const status = select("#recStatus");
-        const timeDisp = select("#recTime");
-        const playback = select("#playback");
-        
-        // 既に録音中の場合 (停止処理)
-        if (mediaRecorder && mediaRecorder.state === "recording") {
-          mediaRecorder.stop();
-          micStream.getTracks().forEach((t) => t.stop());
-          btn.html("🎧 録音開始");
-          status.html("停止中");
-          clearInterval(recordTimer);
-          return; // 停止処理が完了したら終了
-        }
-        
-        // 録音開始処理
-        try {
-          // マイクストリームを取得
-          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          mediaRecorder = new MediaRecorder(micStream);
-          chunks = [];
-          recordedBuffer = null;
-          recordedBlob = null;
-          
+      // <input type="file"> 選択時の処理
+      function handleFileSelect() {
+          const file = this.elt.files[0];
+          if (file) {
+              handleFile(file);
+          }
+      }
+
+      // メインのファイル処理とデコード
+      async function handleFile(file) {
+          if (!file.type.startsWith("audio/")) {
+              select("#fileStatus").html("❌ 無効なファイル形式です。音声ファイルを選択してください。").style("color", "red");
+              return;
+          }
+
+          select("#fileStatus").html(`🎵 ${file.name} を読み込み中...`).style("color", "blue");
+          select("#processBtn").attribute("disabled", "true");
+          const playback = select("#playback");
           playback.attribute("disabled", "true");
           playback.attribute("src", "");
 
-          mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
-          
-          // 録音停止時の処理
-          mediaRecorder.onstop = async () => {
-            clearInterval(recordTimer);
-            
-            // 録音データをBlobとして保存し、<audio>タグにセット
-            recordedBlob = new Blob(chunks, { type: "audio/webm" });
-            playback.attribute("src", URL.createObjectURL(recordedBlob));
-            playback.removeAttribute("disabled");
+          try {
+              // ファイルをArrayBufferとして読み込み、Web Audio APIでデコード
+              const arrayBuffer = await file.arrayBuffer();
+              const ctx = getAudioContext();
+              recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
 
-            // Web Audio API用にAudioBufferにデコード
-            const arrayBuffer = await recordedBlob.arrayBuffer();
-            const ctx = getAudioContext();
-            recordedBuffer = await ctx.decodeAudioData(arrayBuffer);
-            
-            const duration = recordedBuffer.duration.toFixed(2);
-            status.html(`録音完了 (${duration} 秒)`);
-            drawWaveform(recordedBuffer);
-            select("#processBtn").removeAttribute("disabled");
-          };
+              // デコード成功後の処理
+              const duration = recordedBuffer.duration.toFixed(2);
+              select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
+              
+              // <audio>タグで元の音声を再生できるように設定
+              playback.attribute("src", URL.createObjectURL(file)); 
+              playback.removeAttribute("disabled");
+              
+              drawWaveform(recordedBuffer);
+              select("#processBtn").removeAttribute("disabled");
 
-          // 録音開始
-          mediaRecorder.start();
-          recordStartTime = window.performance.now(); // millis()の代わりにperformance.now()を使用
-          status.html("🔴 録音中...");
-          btn.html("⏹️ 録音停止");
-
-          // タイマー処理
-          recordTimer = setInterval(() => {
-            const elapsed = ((window.performance.now() - recordStartTime) / 1000).toFixed(1);
-            timeDisp.html(`録音時間: ${elapsed} 秒`);
-          }, 100);
-
-        } catch (e) {
-          alert("マイクが許可されていません。HTTPSでアクセスしているか確認してください。エラー: " + e.message);
-          status.html("❌ マイク使用不可");
-        }
-      }
-
-      function playSample() {
-        // ... (省略: playSample関数の内容は変更なしで動作する)
-        const ctx = getAudioContext();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        gain.gain.value = 0.2;
-        osc.type = "sine";
-        osc.frequency.value = 440;
-        osc.connect(gain).connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 1.0);
-
-        // サンプル波形描画
-        waveform = [];
-        for (let i = 0; i < 600; i++) {
-          waveform.push(Math.sin((i / 600) * TWO_PI * 10));
-        }
-        drawWaveformArray(waveform);
-        select("#recStatus").html("サンプル再生完了");
+          } catch (e) {
+              select("#fileStatus").html(`❌ デコードエラーが発生しました: ${e.message}`).style("color", "red");
+              recordedBuffer = null;
+              drawWaveform(null);
+          }
       }
 
       function drawWaveform(buffer) {
-        // ... (省略: drawWaveform関数の内容は変更なしで動作する)
         if (!buffer) {
           background(255);
-          text("録音データがありません", width / 2, height / 2);
+          text("ファイルを読み込んでください", width / 2, height / 2);
           return;
         }
+        // ... (波形描画ロジックは変更なし)
         const data = buffer.getChannelData(0);
         waveform = [];
-        const step = Math.floor(data.length / width);
+        // 幅600pxに合わせてデータを間引く
+        const step = Math.floor(data.length / width); 
         for (let i = 0; i < data.length; i += step) {
           waveform.push(data[i]);
         }
@@ -171,7 +161,7 @@
       }
 
       function drawWaveformArray(arr) {
-        // ... (省略: drawWaveformArray関数の内容は変更なしで動作する)
+        // ... (波形配列描画ロジックは変更なし)
         background(255);
         stroke(0);
         noFill();
@@ -184,7 +174,7 @@
       }
 
       function processAndPlay() {
-        if (!recordedBuffer) return alert("録音データがありません。");
+        if (!recordedBuffer) return alert("音声データが読み込まれていません。");
 
         const sampleStep = int(select("#sampleSlider").value());
         const bitDepth = int(select("#bitSlider").value());
@@ -193,28 +183,24 @@
         const numChannels = recordedBuffer.numberOfChannels;
         const length = recordedBuffer.length;
         const sampleRate = recordedBuffer.sampleRate;
-        // 新しいAudioBufferを作成
         const newBuffer = ctx.createBuffer(numChannels, length, sampleRate);
 
         for (let ch = 0; ch < numChannels; ch++) {
           const input = recordedBuffer.getChannelData(ch);
           const output = newBuffer.getChannelData(ch);
           
-          // 処理後の配列を線形補間で埋めるために、現在の値を保持する変数
-          let lastValue = 0;
+          let lastValue = 0; // ホールド用
 
           for (let i = 0; i < length; i++) {
             if (i % sampleStep === 0) {
-              // 標本化点 (サンプリング)
-              
-              // 量子化 (Quantization)
+              // 標本化点: 量子化を適用
               const quantLevels = Math.pow(2, bitDepth);
               const scale = quantLevels / 2;
               lastValue = Math.round(input[i] * scale) / scale;
               output[i] = lastValue;
 
             } else {
-              // 標本化点以外 (ホールド)
+              // 標本化点以外: 直前の標本化の値をホールド
               output[i] = lastValue; 
             }
           }
@@ -226,18 +212,17 @@
         const src = ctx.createBufferSource();
         src.buffer = newBuffer;
         src.connect(ctx.destination);
-        src.start(0); // すぐに再生開始
+        src.start(0); 
         
-        // 再生ステータスの更新
-        select("#recStatus").html("処理後の音を再生中...");
+        select("#fileStatus").html("処理後の音を再生中...").style("color", "darkorange");
         src.onended = () => {
-            select("#recStatus").html("処理後の音の再生が終了しました。");
+            // 再生終了後、元のステータスに戻す
+            const duration = recordedBuffer.duration.toFixed(2);
+            select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
         };
       }
 
-      function draw() {
-        // p5のメインループ。波形はイベントドリブンで描画するため、ここでは空のままで問題ない。
-      }
+      function draw() {}
     </script>
   </body>
 </html>
