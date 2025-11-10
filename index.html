@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>音のデジタル化体験アプリ</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+  <style>
+    body { font-family: "Segoe UI", sans-serif; text-align: center; background: #f8f8f8; }
+    h2 { margin-top: 10px; }
+    #controls { margin: 15px auto; padding: 10px; background: white; width: 80%; border-radius: 12px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+    label { display: block; margin: 8px; }
+    canvas { margin-top: 15px; border-radius: 12px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+    button { margin: 8px; padding: 6px 12px; border: none; border-radius: 6px; background-color: #4CAF50; color: white; cursor: pointer; }
+    button:hover { background-color: #45a049; }
+    input[type=range] { width: 200px; }
+  </style>
+</head>
+<body>
+  <h2>音のデジタル化を体験しよう</h2>
+  <div id="controls">
+    <label>① 音声を選択：
+      <button id="loadSample">サンプル音声</button>
+      <button id="recordBtn">録音開始🎤</button>
+      <button id="stopRec" disabled>録音停止</button>
+    </label>
+    <label>② 標本化周波数（kHz）：
+      <input id="sampleRate" type="range" min="4" max="44" step="4" value="44">
+      <span id="srLabel">44</span>kHz
+    </label>
+    <label>③ 量子化ビット数（bit）：
+      <input id="bitDepth" type="range" min="4" max="16" step="4" value="16">
+      <span id="bdLabel">16</span>bit
+    </label>
+    <button id="playBtn" disabled>再生 ▶</button>
+  </div>
+
+  <script>
+    let soundFile;
+    let mic, recorder, recordedSound;
+    let waveform = [];
+    let canvasW = 600, canvasH = 200;
+
+    function setup() {
+      let cnv = createCanvas(canvasW, canvasH);
+      cnv.parent(document.body);
+      background(240);
+      textAlign(CENTER, CENTER);
+      text("ここに波形が表示されます", width / 2, height / 2);
+
+      select("#sampleRate").input(() => {
+        select("#srLabel").html(select("#sampleRate").value());
+      });
+      select("#bitDepth").input(() => {
+        select("#bdLabel").html(select("#bitDepth").value());
+      });
+
+      select("#loadSample").mousePressed(loadSampleSound);
+      select("#recordBtn").mousePressed(startRecording);
+      select("#stopRec").mousePressed(stopRecording);
+      select("#playBtn").mousePressed(playProcessed);
+    }
+
+    function draw() {
+      if (waveform.length > 0) {
+        background(255);
+        noFill();
+        stroke(0);
+        beginShape();
+        for (let i = 0; i < waveform.length; i++) {
+          let x = map(i, 0, waveform.length, 0, width);
+          let y = map(waveform[i], -1, 1, height, 0);
+          vertex(x, y);
+        }
+        endShape();
+      }
+    }
+
+    function loadSampleSound() {
+      soundFile = loadSound("https://cdn.jsdelivr.net/gh/johnrobinsn/sample_audio@main/hello.wav", () => {
+        waveform = soundFile.getPeaks(1000);
+        select("#playBtn").removeAttribute("disabled");
+      });
+    }
+
+    async function startRecording() {
+      mic = new p5.AudioIn();
+      await mic.start();
+      recorder = new p5.SoundRecorder();
+      recorder.setInput(mic);
+      recordedSound = new p5.SoundFile();
+      recorder.record(recordedSound);
+      select("#recordBtn").attribute("disabled", "");
+      select("#stopRec").removeAttribute("disabled");
+    }
+
+    function stopRecording() {
+      recorder.stop();
+      waveform = [];
+      select("#recordBtn").removeAttribute("disabled");
+      select("#stopRec").attribute("disabled", "");
+      select("#playBtn").removeAttribute("disabled");
+    }
+
+    function playProcessed() {
+      if (!soundFile && !recordedSound) return;
+      let src = soundFile || recordedSound;
+      let sr = int(select("#sampleRate").value()) * 1000;
+      let bits = int(select("#bitDepth").value());
+
+      // 元データを取得
+      let raw = src.buffer.getChannelData(0);
+      let step = floor(src.sampleRate() / sr);
+      let newData = [];
+
+      // 標本化（間引き）
+      for (let i = 0; i < raw.length; i += step) newData.push(raw[i]);
+
+      // 量子化
+      let levels = pow(2, bits);
+      for (let i = 0; i < newData.length; i++) {
+        newData[i] = round((newData[i] + 1) / 2 * (levels - 1)) / (levels - 1) * 2 - 1;
+      }
+
+      waveform = newData.slice(0, 1000);
+
+      // 再生用にバッファを作成
+      let audioCtx = getAudioContext();
+      let buffer = audioCtx.createBuffer(1, newData.length, sr);
+      buffer.copyToChannel(new Float32Array(newData), 0);
+
+      let srcNode = audioCtx.createBufferSource();
+      srcNode.buffer = buffer;
+      srcNode.connect(audioCtx.destination);
+      srcNode.start();
+    }
+  </script>
+</body>
+</html>
