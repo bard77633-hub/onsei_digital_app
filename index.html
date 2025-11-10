@@ -29,19 +29,19 @@
       </div>
       <span id="fileStatus" style="color:blue;">音声ファイルを読み込んでください</span><br /><br />
 
-      <button id="processBtn" disabled>⚙️ 処理＆再生</button><br />
+      <button id="processBtn" disabled>⚙️ 処理＆再生</button>
       <button id="stopBtn" disabled>■ 再生を停止</button><br /><br />
       
       <label>元の音声再生:</label>
       <audio id="playback" controls disabled></audio><br /><br />
 
-      <label>標本化レート（間隔の目安）：</label>
+      <label>標本化レート（最大44.1kHz）：</label>
       <input type="range" id="sampleSlider" min="1" max="50" value="1" /> 
-      <span id="sampleValue">44.1k Hz</span><br />
+      <span id="sampleValue"></span><br />
 
-      <label>量子化ビット数：</label>
+      <label>量子化ビット数（2〜24 bit）：</label>
       <input type="range" id="bitSlider" min="2" max="24" value="8" />
-      <span id="bitValue">8 bit</span><br /><br />
+      <span id="bitValue"></span><br /><br />
 
       <div id="waveContainer" style="margin-top:20px;">
         <h4>波形表示</h4>
@@ -51,33 +51,45 @@
     <script>
       let recordedBuffer = null; 
       let waveform = [];
-      let currentSource = null; // 現在再生中のAudioBufferSourceNodeを保持する
+      let currentSource = null; 
+      const BASE_SAMPLE_RATE = 44100; // 基準サンプリングレート（Hz）
 
-      // サンプリングレート表示を更新する
+      // サンプリングレート表示を更新する関数
       function updateSampleRateDisplay() {
         const step = int(select("#sampleSlider").value());
-        // 基準サンプリングレートを44100Hzと仮定
-        const baseRate = 44100;
-        // 表示レートは、基準レートをステップ数で割った値。
-        // step=1: 44100Hz, step=50: 882Hz
-        const displayRate = baseRate / step;
+        const maxStep = int(select("#sampleSlider").attribute("max"));
         
-        // 1000Hz以上はk Hzで表示
-        if (displayRate >= 1000) {
-            select("#sampleValue").html(`${(displayRate / 1000).toFixed(1)}k Hz`);
+        // 現在のレートを計算
+        const currentRate = BASE_SAMPLE_RATE / step;
+        
+        // 下限のレート（最大間引き時）を計算
+        const minRate = BASE_SAMPLE_RATE / maxStep; 
+        
+        let rateText;
+        if (currentRate >= 1000) {
+            rateText = `${(currentRate / 1000).toFixed(1)} k Hz`;
         } else {
-            select("#sampleValue").html(`${displayRate.toFixed(0)} Hz`);
+            rateText = `${currentRate.toFixed(0)} Hz`;
         }
+        
+        // 下限レートを明示
+        const minRateText = `${minRate.toFixed(0)} Hz`;
+        
+        select("#sampleValue").html(`${rateText} (下限は約 ${minRateText})`);
       }
       
-      // 再生ノードを停止する
+      // ビット数表示を更新する関数
+      function updateBitDepthDisplay() {
+          select("#bitValue").html(`${select("#bitSlider").value()} bit`);
+      }
+
+      // 再生ノードを停止する関数
       function stopCurrentPlayback() {
           if (currentSource) {
               try {
-                  // stop()を呼び出して再生を停止
                   currentSource.stop();
               } catch (e) {
-                  // 再生が既に終了しているなどでエラーが出ても無視
+                  // エラーは無視
               } finally {
                   currentSource = null;
               }
@@ -102,20 +114,16 @@
 
         // イベントリスナーの設定
         select("#processBtn").mousePressed(processAndPlay);
-        select("#stopBtn").mousePressed(stopCurrentPlayback); // 停止ボタンの追加
+        select("#stopBtn").mousePressed(stopCurrentPlayback); 
 
-        select("#sampleSlider").input(() => {
-            updateSampleRateDisplay();
-        });
-        select("#bitSlider").input(() =>
-          select("#bitValue").html(`${select("#bitSlider").value()} bit`)
-        );
+        select("#sampleSlider").input(updateSampleRateDisplay);
+        select("#bitSlider").input(updateBitDepthDisplay);
 
         // 初期表示を更新
         updateSampleRateDisplay(); 
-        select("#bitValue").html(`${select("#bitSlider").value()} bit`);
+        updateBitDepthDisplay();
         
-        // ファイルアップロード/ドロップのリスナー
+        // ファイルアップロード/ドロップのリスナー (変更なし)
         const fileInput = select("#fileInput");
         const dropZone = select("#dropZone");
 
@@ -149,7 +157,7 @@
       }
 
       async function handleFile(file) {
-          stopCurrentPlayback(); // 新しいファイル読み込み時に再生中の音を停止
+          stopCurrentPlayback(); 
           
           if (!file.type.startsWith("audio/")) {
               select("#fileStatus").html("❌ 無効なファイル形式です。音声ファイルを選択してください。").style("color", "red");
@@ -213,7 +221,6 @@
       function processAndPlay() {
         if (!recordedBuffer) return alert("音声データが読み込まれていません。");
         
-        // **【重要】再生開始前に前回のノードを停止**
         stopCurrentPlayback(); 
 
         const sampleStep = int(select("#sampleSlider").value());
@@ -254,16 +261,14 @@
         src.connect(ctx.destination);
         src.start(0); 
         
-        // **再生ノードの参照を保持**
         currentSource = src;
         select("#stopBtn").removeAttribute("disabled");
 
         select("#fileStatus").html("処理後の音を再生中...").style("color", "darkorange");
         
-        // 再生が終了したらノードの参照を解放
         src.onended = () => {
             if (currentSource === src) {
-                stopCurrentPlayback(); // 状態をリセット
+                stopCurrentPlayback(); 
             }
         };
       }
