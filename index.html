@@ -60,27 +60,19 @@
           const sliderMin = 1;
           const sliderMax = 50;
           
-          // スライダーの値を 0 から 1 の範囲に正規化 (0: 低音質/左端, 1: 高音質/右端)
           const normalized = (sliderValue - sliderMin) / (sliderMax - sliderMin);
-          
-          // normalizedが小さいときに大きな値を取り、大きいときに小さな値を取るように反転させる
-          const reverseNormalized = 1 - normalized; // 0 (右端) から 1 (左端) へ
+          const reverseNormalized = 1 - normalized; 
 
-          // 対数スケールを設定
-          const minStep = 1; // 最小ステップ (高音質)
-          const maxStep = MAX_STEP; // 最大ステップ (低音質)
+          const minStep = 1;
+          const maxStep = MAX_STEP;
 
-          // 指数関数的に値をマッピング (知覚的に線形になるように)
-          const logMin = Math.log(minStep); // log(1) = 0
-          const logMax = Math.log(maxStep); // log(50)
+          const logMin = Math.log(minStep);
+          const logMax = Math.log(maxStep);
           
-          // 逆正規化値に基づいて対数スケールの位置を決定
           const logStep = logMin + (logMax - logMin) * reverseNormalized;
 
-          // 最終的な間引きステップを計算 (小数点以下を四捨五入)
           const sampleStep = Math.round(Math.exp(logStep));
           
-          // 最小ステップ（1）より小さくならないようにする
           return Math.max(minStep, sampleStep); 
       }
 
@@ -113,13 +105,13 @@
               try {
                   currentSource.stop();
               } catch (e) {
-                  // 再生が既に終了しているなどでエラーが出ても無視
+                  // エラーは無視
               } finally {
                   currentSource = null;
               }
           }
           select("#stopBtn").attribute("disabled", "true");
-          // ファイルステータスを元の状態に戻す
+          
           if (recordedBuffer) {
               const duration = recordedBuffer.duration.toFixed(2);
               select("#fileStatus").html(`✅ 読み込み完了 (${duration} 秒)`).style("color", "green");
@@ -130,24 +122,23 @@
 
 
       function setup() {
-        let cnv = createCanvas(600, 200);
+        // 【修正点1: キャンバスの高さを400pxに拡張】
+        let cnv = createCanvas(600, 400); 
         cnv.parent("waveContainer");
         background(240);
         textAlign(CENTER);
         text("ファイルを読み込むと波形がここに表示されます", width / 2, height / 2);
 
-        // イベントリスナーの設定
+        // イベントリスナーの設定 (変更なし)
         select("#processBtn").mousePressed(processAndPlay);
         select("#stopBtn").mousePressed(stopCurrentPlayback); 
 
         select("#sampleSlider").input(updateSampleRateDisplay);
         select("#bitSlider").input(updateBitDepthDisplay);
 
-        // 初期表示を更新
         updateSampleRateDisplay(); 
         updateBitDepthDisplay();
         
-        // ファイルアップロード/ドロップのリスナー (変更なし)
         const fileInput = select("#fileInput");
         const dropZone = select("#dropZone");
 
@@ -236,7 +227,9 @@
         noFill();
         beginShape();
         for (let x = 0; x < arr.length; x++) {
-          const y = map(arr[x], -1, 1, height, 0);
+          // 【修正点2: 振幅マッピングの調整】
+          // 振幅 -1 から 1 を、キャンバスの高さ（height）全体にマップする
+          const y = map(arr[x], -1, 1, 0, height); 
           vertex(x, y);
         }
         endShape();
@@ -248,7 +241,6 @@
         stopCurrentPlayback(); 
 
         const sliderValue = int(select("#sampleSlider").value());
-        // 対数的に調整された標本化ステップを使用
         const sampleStep = calculateSampleStep(sliderValue); 
 
         const bitDepth = int(select("#bitSlider").value());
@@ -267,14 +259,12 @@
 
           for (let i = 0; i < length; i++) {
             if (i % sampleStep === 0) {
-              // 標本化点: 量子化を適用
               const quantLevels = Math.pow(2, bitDepth);
               const scale = quantLevels / 2;
               lastValue = Math.round(input[i] * scale) / scale;
               output[i] = lastValue;
 
             } else {
-              // 標本化点以外: 直前の標本化の値をホールド
               output[i] = lastValue; 
             }
           }
@@ -282,7 +272,6 @@
 
         drawWaveform(newBuffer);
         
-        // Web Audio APIで処理後の音を再生
         const src = ctx.createBufferSource();
         src.buffer = newBuffer;
         src.connect(ctx.destination);
